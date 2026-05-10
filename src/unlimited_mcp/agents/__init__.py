@@ -1,10 +1,12 @@
-"""Agent layer: CLI agent abstraction and argv rendering.
+"""Agent layer: CLI agent abstraction, argv rendering, and runner glue.
 
-Phase 1 ships :class:`CLIAgent` and :func:`CLIAgent.render_argv` only.  The
-runner that ties this together with ``Host`` + ``Provider`` + ``Workspace`` +
-``JobStore`` + ``Safety`` lives in ``agents/runner.py`` and lands in a later PR.
+* :class:`CLIAgent` — resolved agent definition + ``render_argv`` pipeline.
+* :class:`AgentRunner` — composes ``CLIAgent`` with the safety pipeline and
+  :class:`~unlimited_mcp.jobs.runner_local.LocalRunner` to dispatch jobs.
+* :class:`AgentRenderError` — raised when an invocation cannot be rendered.
 """
 
 from .base import AgentRenderError, CLIAgent
+from .runner import DEFAULT_TOOL_NAME, AgentRunner
 
-__all__ = ["AgentRenderError", "CLIAgent"]
+__all__ = ["DEFAULT_TOOL_NAME", "AgentRenderError", "AgentRunner", "CLIAgent"]
