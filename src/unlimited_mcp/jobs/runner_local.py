@@ -253,6 +253,11 @@ class LocalRunner:
         return self._store.job_dir(job_id) / "state.json"
 
     def _check_zombie(self, job_id: str, result: JobResult) -> JobResult:
+        # If our own watcher thread is still alive it will write the final
+        # result shortly — don't falsely promote to zombie in that race window.
+        watcher = self._watchers.get(job_id)
+        if watcher is not None and watcher.is_alive():
+            return result
         state = _read_state(self._state_path(job_id))
         pid = state.get("pid") if state else None
         if isinstance(pid, int) and not _pid_alive(pid):
