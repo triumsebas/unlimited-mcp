@@ -57,6 +57,7 @@ dev = [
     "pytest-asyncio>=0.23",
     "ruff>=0.6",
     "mypy>=1.10",
+    "types-PyYAML>=6.0",
 ]
 
 [tool.ruff]
@@ -86,3 +87,7 @@ markers = [
 python_version = "3.11"
 strict = true
 files = ["src/unlimited_mcp"]
+
+[[tool.mypy.overrides]]
+module = ["ruamel.*"]
+ignore_missing_imports = true
