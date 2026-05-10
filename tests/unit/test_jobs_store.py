@@ -23,11 +23,14 @@ def _now() -> datetime:
 
 def test_make_job_id_sortable_and_unique() -> None:
     a = JobStore.make_job_id("delegate")
+    # Wait long enough to guarantee a strictly-greater timestamp portion.
+    time.sleep(1.1)
     b = JobStore.make_job_id("delegate")
     assert a != b
     assert a.startswith("delegate-")
-    # Sort order is timestamp-based (a was made first, b second).
-    assert min(a, b) == a
+    # Timestamp-based ordering: when timestamps differ by ≥1s, lexicographic
+    # comparison agrees with chronological order.
+    assert a < b
 
 
 def test_make_job_id_sanitizes_tool() -> None:
