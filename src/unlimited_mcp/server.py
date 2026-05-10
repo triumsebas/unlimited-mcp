@@ -38,15 +38,12 @@ from unlimited_mcp.paths import (
 )
 from unlimited_mcp.providers.base import Provider
 from unlimited_mcp.safety.argv_check import SafetyChecker
-from unlimited_mcp.tools.execution import (
-    delegate_to_agent as _delegate_to_agent,
-)
-from unlimited_mcp.tools.execution import (
-    run_and_summarize as _run_and_summarize,
-)
-from unlimited_mcp.tools.execution import (
-    run_command as _run_command,
-)
+from unlimited_mcp.tools.execution import delegate_to_agent as _delegate_to_agent
+from unlimited_mcp.tools.execution import run_and_summarize as _run_and_summarize
+from unlimited_mcp.tools.execution import run_command as _run_command
+from unlimited_mcp.tools.jobs import cancel_job as _cancel_job
+from unlimited_mcp.tools.jobs import get_job_result as _get_job_result
+from unlimited_mcp.tools.jobs import list_jobs as _list_jobs
 
 _REPO_KNOWLEDGE_PATH = Path(__file__).parent.parent.parent / "knowledge.yaml"
 
@@ -156,5 +153,20 @@ def make_server(
             timeout_seconds=timeout_seconds,
             confirm_token=confirm_token,
         )
+
+    @app.tool()
+    def get_job_result(job_id: str) -> JobResult:
+        """Return the current result for a background job (with zombie detection)."""
+        return _get_job_result(job_id, runner=runner)
+
+    @app.tool()
+    def list_jobs() -> list[JobResult]:
+        """Return all known job results, ordered by submission time."""
+        return _list_jobs(runner=runner)
+
+    @app.tool()
+    def cancel_job(job_id: str) -> JobResult:
+        """Send SIGTERM to a running job and mark it cancelled."""
+        return _cancel_job(job_id, runner=runner)
 
     return app

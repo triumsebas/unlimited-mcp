@@ -51,11 +51,18 @@ def _result_dict(call_result: tuple[Any, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_make_server_registers_three_tools(tmp_path: Path) -> None:
+def test_make_server_registers_six_tools(tmp_path: Path) -> None:
     app = _make_server(tmp_path)
     tools = _run(app.list_tools())
     names = {t.name for t in tools}
-    assert names == {"run_command", "delegate_to_agent", "run_and_summarize"}
+    assert names == {
+        "run_command",
+        "delegate_to_agent",
+        "run_and_summarize",
+        "get_job_result",
+        "list_jobs",
+        "cancel_job",
+    }
 
 
 def test_tool_descriptions_are_non_empty(tmp_path: Path) -> None:

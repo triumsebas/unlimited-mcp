@@ -6,5 +6,13 @@ there is no module-level state.
 """
 
 from unlimited_mcp.tools.execution import delegate_to_agent, run_and_summarize, run_command
+from unlimited_mcp.tools.jobs import cancel_job, get_job_result, list_jobs
 
-__all__ = ["delegate_to_agent", "run_and_summarize", "run_command"]
+__all__ = [
+    "cancel_job",
+    "delegate_to_agent",
+    "get_job_result",
+    "list_jobs",
+    "run_and_summarize",
+    "run_command",
+]

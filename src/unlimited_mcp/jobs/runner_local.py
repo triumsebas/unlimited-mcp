@@ -230,6 +230,16 @@ class LocalRunner:
         self._store.write_result(cancelled)
         return cancelled
 
+    def list_results(self) -> list[JobResult]:
+        """Return the current :class:`~unlimited_mcp.jobs.result.JobResult`
+        for every known job, with zombie detection applied to running ones."""
+        results: list[JobResult] = []
+        for job_id in self._store.list_jobs():
+            r = self.get_result(job_id)
+            if r is not None:
+                results.append(r)
+        return results
+
     def join_all(self, timeout: float = 10.0) -> None:
         """Block until all watcher threads finish.  Used in tests."""
         for t in list(self._watchers.values()):
