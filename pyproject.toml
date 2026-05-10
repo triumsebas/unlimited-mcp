@@ -1,0 +1,93 @@
+[project]
+name = "unlimited-mcp"
+version = "0.0.1"
+description = "MCP orchestration server: delegate work from frontier orchestrators to cheaper or specialized workers."
+readme = "README.md"
+license = "Apache-2.0"
+license-files = ["LICENSE"]
+authors = [{ name = "Sebastian Fernandez" }]
+requires-python = ">=3.11"
+keywords = [
+    "mcp",
+    "model-context-protocol",
+    "agents",
+    "orchestration",
+    "delegation",
+]
+classifiers = [
+    "Development Status :: 2 - Pre-Alpha",
+    "Programming Language :: Python :: 3",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "Programming Language :: Python :: 3.13",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: POSIX",
+    "Operating System :: MacOS",
+    "Topic :: Software Development",
+]
+dependencies = [
+    "mcp>=1.0",
+    "pydantic>=2.7",
+    "pyyaml>=6.0",
+    "ruamel.yaml>=0.18",
+    "python-dotenv>=1.0",
+    "structlog>=24.1",
+    "httpx>=0.27",
+]
+
+[project.optional-dependencies]
+smolagents = ["smolagents>=1.0"]
+ollama = ["ollama>=0.3"]
+anthropic = ["anthropic>=0.39"]
+ssh = ["paramiko>=3.4"]
+
+[project.scripts]
+unlimited-mcp = "unlimited_mcp.cli:main"
+
+[build-system]
+requires = ["hatchling"]
+build-backend = "hatchling.build"
+
+[tool.hatch.build.targets.wheel]
+packages = ["src/unlimited_mcp"]
+
+[dependency-groups]
+dev = [
+    "pytest>=8.2",
+    "pytest-asyncio>=0.23",
+    "ruff>=0.6",
+    "mypy>=1.10",
+    "types-PyYAML>=6.0",
+]
+
+[tool.ruff]
+line-length = 100
+target-version = "py311"
+src = ["src", "tests"]
+
+[tool.ruff.lint]
+select = ["E", "F", "I", "B", "UP", "N", "RUF", "SIM"]
+ignore = []
+
+[tool.ruff.format]
+quote-style = "double"
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]
+asyncio_mode = "auto"
+markers = [
+    "integration: requires external CLIs or network",
+    "requires_opencode_key: requires OPENCODE_API_KEY env var",
+    "requires_aider: requires aider on PATH",
+    "requires_ts: requires task-spooler (ts) on PATH",
+    "requires_ollama: requires running ollama server",
+]
+
+[tool.mypy]
+python_version = "3.11"
+strict = true
+files = ["src/unlimited_mcp"]
+
+[[tool.mypy.overrides]]
+module = ["ruamel.*"]
+ignore_missing_imports = true
