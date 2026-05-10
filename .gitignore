@@ -127,6 +127,7 @@ cython_debug/
 
 # Privado — nunca subir
 local/
+.claude/
 
 # Aider
 .aider*
