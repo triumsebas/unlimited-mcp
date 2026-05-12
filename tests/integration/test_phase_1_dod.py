@@ -75,17 +75,19 @@ def test_phase_1_definition_of_done(tmp_path: Path) -> None:
 
     app = _make_app(tmp_path)
 
-    # ---- 1. Six tools are registered ------------------------------------
+    # ---- 1. Full Phase 1 tool set is registered -------------------------
+    _PHASE_1_TOOLS = {
+        "run_command", "run_and_summarize", "delegate_to_agent", "submit_task",
+        "get_job_status", "get_job_result", "list_jobs", "cancel_job",
+        "list_capabilities", "add_provider", "add_agent", "configure_agent",
+        "remove_entry", "list_safety_policy",
+        "add_allowed_root", "remove_allowed_root", "add_deny_path", "remove_deny_path",
+        "lookup_agent_cli", "register_agent_knowledge",
+        "restart_server", "install_and_restart",
+    }
     tools = _run(app.list_tools())
     names = {t.name for t in tools}
-    assert names == {
-        "run_command",
-        "delegate_to_agent",
-        "run_and_summarize",
-        "get_job_result",
-        "list_jobs",
-        "cancel_job",
-    }, f"unexpected tool set: {names}"
+    assert names == _PHASE_1_TOOLS, f"unexpected tool set diff: {names.symmetric_difference(_PHASE_1_TOOLS)}"
     for t in tools:
         assert t.description, f"tool {t.name!r} has no description"
 

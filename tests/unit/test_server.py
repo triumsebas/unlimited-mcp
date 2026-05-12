@@ -51,18 +51,42 @@ def _result_dict(call_result: tuple[Any, Any]) -> dict[str, Any]:
 # ---------------------------------------------------------------------------
 
 
-def test_make_server_registers_six_tools(tmp_path: Path) -> None:
+_PHASE_1_TOOLS = {
+    # execution
+    "run_command",
+    "run_and_summarize",
+    "delegate_to_agent",
+    "submit_task",
+    # job management
+    "get_job_status",
+    "get_job_result",
+    "list_jobs",
+    "cancel_job",
+    # config
+    "list_capabilities",
+    "add_provider",
+    "add_agent",
+    "configure_agent",
+    "remove_entry",
+    "list_safety_policy",
+    "add_allowed_root",
+    "remove_allowed_root",
+    "add_deny_path",
+    "remove_deny_path",
+    # knowledge
+    "lookup_agent_cli",
+    "register_agent_knowledge",
+    # meta
+    "restart_server",
+    "install_and_restart",
+}
+
+
+def test_make_server_registers_phase_1_tools(tmp_path: Path) -> None:
     app = _make_server(tmp_path)
     tools = _run(app.list_tools())
     names = {t.name for t in tools}
-    assert names == {
-        "run_command",
-        "delegate_to_agent",
-        "run_and_summarize",
-        "get_job_result",
-        "list_jobs",
-        "cancel_job",
-    }
+    assert names == _PHASE_1_TOOLS, f"diff: {names.symmetric_difference(_PHASE_1_TOOLS)}"
 
 
 def test_tool_descriptions_are_non_empty(tmp_path: Path) -> None:

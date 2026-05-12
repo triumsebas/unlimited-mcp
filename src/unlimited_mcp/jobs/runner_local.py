@@ -84,6 +84,7 @@ class LocalRunner:
         self._redactor = redactor
         self._idempotency: dict[str, str] = {}
         self._watchers: dict[str, threading.Thread] = {}
+        self._cancelled: set[str] = set()
 
     # ------------------------------------------------------------------
     # Public API
@@ -212,6 +213,8 @@ class LocalRunner:
             return result
 
         state = _read_state(self._state_path(job_id))
+        self._cancelled.add(job_id)
+
         if state:
             pid = state.get("pid")
             if isinstance(pid, int):
@@ -328,6 +331,13 @@ class LocalRunner:
             summary = last_line[-1][:500] if last_line else f"exit_code={exit_code}"
         else:
             summary = "Completed successfully."
+
+        # Don't overwrite a cancel() — check both in-memory flag and persisted status.
+        if job_id in self._cancelled:
+            return
+        existing = self._store.read_result(job_id)
+        if existing is not None and existing.status == "cancelled":
+            return
 
         result = JobResult(
             ok=ok,
