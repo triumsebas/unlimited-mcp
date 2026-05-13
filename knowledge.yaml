@@ -35,18 +35,18 @@ orchestrators:
 
 # ---------------------------------------------------------------------------
 # CLI agents (coding workers)
-# command_template uses {prompt!q} for shell-quoted prompt, {files} for file list.
+# command_template uses {prompt} for the prompt text, {files} for file list.
 # ---------------------------------------------------------------------------
 clis:
   aider:
     docs_url: "https://aider.chat/docs/"
     install_hint: "pip install aider-install && aider-install"
-    command_template: "aider --message {prompt!q}"
+    command_template: "aider --message {prompt}"
     params:
       model:
         type: str
         default: null
-        render: "--model {value!q}"
+        render: "--model {value}"
       git:
         type: bool
         default: true
@@ -69,23 +69,17 @@ clis:
   opencode:
     docs_url: "https://opencode.ai/docs"
     install_hint: "npm install -g opencode-ai  # or: brew install opencode"
-    command_template: "opencode run {prompt!q}"
+    command_template: "opencode run {prompt} --format json"
     params:
       model:
         type: str
         default: null
-        render: "--model {value!q}"
-      headless:
-        type: bool
-        default: false
-        render:
-          "true": "--headless"
-          "false": ""
+        render: "--model {value}"
     verified: false
   smolagents:
     docs_url: "https://huggingface.co/docs/smolagents"
     install_hint: "pip install smolagents"
-    command_template: "python -m smolagents.cli run {prompt!q}"
+    command_template: "python -m smolagents.cli run {prompt}"
     params: {}
     verified: false
 

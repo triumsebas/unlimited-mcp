@@ -139,6 +139,7 @@ class LocalRunner:
         env = {**os.environ, **(env_extra or {})}
         proc: subprocess.Popen[bytes] = subprocess.Popen(
             argv,
+            stdin=subprocess.DEVNULL,
             stdout=stdout_fh,
             stderr=stderr_fh,
             env=env,
