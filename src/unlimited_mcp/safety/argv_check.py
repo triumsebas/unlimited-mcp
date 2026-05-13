@@ -22,6 +22,8 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from unlimited_mcp.config.knowledge import KnowledgeStore
+from unlimited_mcp.config.loader import ConfigStore
 from unlimited_mcp.config.schema import Config, Knowledge
 from unlimited_mcp.jobs.result import BlastRadius, RiskLevel, SafetyClass
 
@@ -75,15 +77,25 @@ class SafetyChecker:
 
     def __init__(
         self,
-        config: Config,
-        knowledge: Knowledge,
+        config: Config | ConfigStore,
+        knowledge: Knowledge | KnowledgeStore,
         confirmations: ConfirmationStore | None = None,
     ) -> None:
-        self.config = config
-        self.knowledge = knowledge
+        self._config_src = config
+        self._knowledge_src = knowledge
+        # Seed the confirmation TTL from the initial config.
+        initial_cfg = config.get() if isinstance(config, ConfigStore) else config
         self.confirmations = confirmations or ConfirmationStore(
-            ttl_seconds=config.safety.confirm_token_ttl_seconds
+            ttl_seconds=initial_cfg.safety.confirm_token_ttl_seconds
         )
+
+    @property
+    def config(self) -> Config:
+        return self._config_src.get() if isinstance(self._config_src, ConfigStore) else self._config_src
+
+    @property
+    def knowledge(self) -> Knowledge:
+        return self._knowledge_src.get() if isinstance(self._knowledge_src, KnowledgeStore) else self._knowledge_src
 
     def check_run_command(
         self,

@@ -119,11 +119,13 @@ def test_phase_1_definition_of_done(tmp_path: Path) -> None:
     assert empty["error"]["code"] == "SHELL_LIKE_BLOCKED"
 
     # ---- 6. Dangerous command → confirm flow ----------------------------
-    # sleep is classified as mutating (from knowledge.yaml), not dangerous.
-    # Use a tool-class override to exercise the confirmation path instead.
-    # We re-create the server with sleep marked dangerous.
-    knowledge_file = tmp_path / "knowledge.yaml"
-    knowledge_file.write_text(
+    # Use a separate tmp dir for app2 so that overwriting knowledge.yaml
+    # does not affect app (which now live-reloads from the same file).
+    tmp2 = tmp_path / "app2"
+    tmp2.mkdir()
+    (tmp2 / "config.yaml").write_text(f"allowed_roots:\n  - {tmp_path}\n  - {tmp2}\n")
+    knowledge_file2 = tmp2 / "knowledge.yaml"
+    knowledge_file2.write_text(
         "clis:\n"
         "  echo:\n"
         "    command_template: /bin/echo {prompt}\n"
@@ -132,10 +134,10 @@ def test_phase_1_definition_of_done(tmp_path: Path) -> None:
         "    safety_class: dangerous\n"
     )
     app2 = make_server(
-        tmp_path / "config.yaml",
-        knowledge_repo=knowledge_file,
-        knowledge_local=tmp_path / "knowledge.local.yaml",
-        jobs_path=tmp_path / "jobs2",
+        tmp2 / "config.yaml",
+        knowledge_repo=knowledge_file2,
+        knowledge_local=tmp2 / "knowledge.local.yaml",
+        jobs_path=tmp2 / "jobs",
     )
     first = _call(app2, "run_command", {"argv": ["/bin/echo", "hi"]})
     assert first["status"] == "pending_confirmation", first

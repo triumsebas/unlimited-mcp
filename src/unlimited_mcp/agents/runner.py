@@ -32,6 +32,8 @@ from datetime import UTC, datetime
 from typing import Any
 
 from unlimited_mcp.agents.base import CLIAgent
+from unlimited_mcp.config.knowledge import KnowledgeStore
+from unlimited_mcp.config.loader import ConfigStore
 from unlimited_mcp.config.schema import Config, Knowledge
 from unlimited_mcp.jobs.result import ErrorBlock, JobResult
 from unlimited_mcp.jobs.runner_local import LocalRunner
@@ -47,8 +49,8 @@ class AgentRunner:
     def __init__(
         self,
         *,
-        config: Config,
-        knowledge: Knowledge,
+        config: Config | ConfigStore,
+        knowledge: Knowledge | KnowledgeStore,
         local_runner: LocalRunner,
         safety: SafetyChecker,
     ) -> None:
@@ -56,6 +58,12 @@ class AgentRunner:
         self._knowledge = knowledge
         self._local_runner = local_runner
         self._safety = safety
+
+    def _get_config(self) -> Config:
+        return self._config.get() if isinstance(self._config, ConfigStore) else self._config
+
+    def _get_knowledge(self) -> Knowledge:
+        return self._knowledge.get() if isinstance(self._knowledge, KnowledgeStore) else self._knowledge
 
     def submit(
         self,
@@ -78,7 +86,7 @@ class AgentRunner:
         to propagate — those are programmer/config errors, distinct from the
         runtime safety pipeline.
         """
-        agent = CLIAgent.from_config(agent_name, self._config, self._knowledge)
+        agent = CLIAgent.from_config(agent_name, self._get_config(), self._get_knowledge())
         argv = agent.render_argv(
             prompt=prompt,
             files=files,

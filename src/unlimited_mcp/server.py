@@ -103,13 +103,12 @@ def make_server(
         knowledge_repo or _REPO_KNOWLEDGE_PATH,
         kl_path,
     )
-    cfg = cfg_store.get()
-    kn = kn_store.get()
-
     job_store = JobStore(jobs_path or jobs_dir())
     runner = LocalRunner(job_store)
-    safety = SafetyChecker(cfg, kn)
-    agent_runner = AgentRunner(config=cfg, knowledge=kn, local_runner=runner, safety=safety)
+    # Pass stores (not snapshots) so config changes made via MCP tools
+    # (add_agent, add_allowed_root, …) are visible on the next tool call.
+    safety = SafetyChecker(cfg_store, kn_store)
+    agent_runner = AgentRunner(config=cfg_store, knowledge=kn_store, local_runner=runner, safety=safety)
 
     app = FastMCP(server_name)
 
