@@ -31,6 +31,7 @@ import subprocess
 import threading
 from datetime import UTC, datetime
 from pathlib import Path
+from collections.abc import Callable
 from typing import BinaryIO
 
 from unlimited_mcp.jobs.result import CommandRecord, ErrorBlock, JobResult, JobStatus
@@ -100,6 +101,9 @@ class LocalRunner:
         env_extra: dict[str, str] | None = None,
         cwd: str | None = None,
         tool: str = "run_command",
+        branch: str | None = None,
+        worktree_path: str | None = None,
+        cleanup_fn: Callable[[], None] | None = None,
     ) -> JobResult:
         """Spawn *argv* in the background and return immediately.
 
@@ -164,12 +168,15 @@ class LocalRunner:
             tool=tool,
             started_at=started_at,
             summary=label or None,
+            branch=branch,
+            worktree_path=worktree_path,
         )
         self._store.write_result(initial)
 
         t = threading.Thread(
             target=self._watch,
-            args=(job_id, proc, stdout_fh, stderr_fh, started_at, timeout_seconds, tool),
+            args=(job_id, proc, stdout_fh, stderr_fh, started_at, timeout_seconds, tool,
+                  branch, worktree_path, cleanup_fn),
             daemon=True,
             name=f"watcher-{job_id}",
         )
@@ -293,6 +300,9 @@ class LocalRunner:
         started_at: datetime,
         timeout_seconds: int,
         tool: str,
+        branch: str | None = None,
+        worktree_path: str | None = None,
+        cleanup_fn: Callable[[], None] | None = None,
     ) -> None:
         timed_out = False
         try:
@@ -351,6 +361,8 @@ class LocalRunner:
             summary=summary,
             raw_output_ref=str(self._store.stdout_path(job_id)),
             commands_run=[CommandRecord(argv=[], exit_code=exit_code, duration_ms=duration_ms)],
+            branch=branch,
+            worktree_path=worktree_path,
         )
         self._store.write_result(result)
         _write_state(
@@ -363,3 +375,6 @@ class LocalRunner:
                 "finished_at": finished_at.isoformat(),
             },
         )
+        if cleanup_fn is not None:
+            with contextlib.suppress(Exception):
+                cleanup_fn()

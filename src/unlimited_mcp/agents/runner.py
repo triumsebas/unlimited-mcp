@@ -1,10 +1,13 @@
-"""AgentRunner: glue between :class:`CLIAgent`, the safety pipeline, and
+"""AgentRunner: glue between :class:`CLIAgent`, the safety pipeline,
+:class:`~unlimited_mcp.workspace.manager.WorkspaceManager`, and
 :class:`~unlimited_mcp.jobs.runner_local.LocalRunner`.
 
 The runner has a single responsibility: take an *agent name* + invocation
-parameters, resolve them into a final argv via :class:`CLIAgent`, run the
-safety pipeline, and dispatch allowed jobs to :class:`LocalRunner`. Every
-code path returns a :class:`~unlimited_mcp.jobs.result.JobResult`:
+parameters, resolve them into a final argv via :class:`CLIAgent`, create
+the appropriate workspace (worktree, temp copy, or current dir) per the
+agent's preset, run the safety pipeline, and dispatch allowed jobs to
+:class:`LocalRunner`. Every code path returns a
+:class:`~unlimited_mcp.jobs.result.JobResult`:
 
 * allowed                       → the running JobResult from LocalRunner.
 * requires_confirmation         → ``status="pending_confirmation"`` with
@@ -12,23 +15,31 @@ code path returns a :class:`~unlimited_mcp.jobs.result.JobResult`:
 * error_code (hard block)       → ``status="failed"`` with a populated
   ``error`` block.
 
-What the runner deliberately does *not* own
--------------------------------------------
-* **Workspace lifecycle.** The caller passes ``cwd: str | None``; cloning
-  a repo, creating a worktree, and cleaning it up are the tool layer's
-  job because they outlive a single async ``submit`` call.
-* **Provider summarisation.** ``CLIAgent`` and :class:`Provider` are
-  orthogonal abstractions; ``run_and_summarize`` composes them at the
-  tool layer instead of inside the runner.
+Workspace lifecycle
+-------------------
+For ``git_worktree`` mode (``safe_dev`` preset):
 
-The runner is synchronous: ``submit`` returns immediately with a
-``status="running"`` JobResult (or a blocked one).  The MCP tool layer
-polls :meth:`LocalRunner.get_result` to deliver the final outcome.
+1. :class:`~unlimited_mcp.workspace.manager.WorkspaceManager` creates a
+   fresh branch ``unlimited-mcp/<label>-<ts>-<hex>`` and a worktree at
+   ``<base_dir>/<label>-<ts>-<hex>``.
+2. The agent runs inside that worktree (``cwd = workspace.path``).
+3. After the watcher thread records the final result, it calls
+   ``workspace.cleanup()`` which removes the worktree directory. The
+   branch is kept (``leave_branch`` result) so the orchestrator can
+   review or merge it.
+4. :attr:`JobResult.branch` and :attr:`JobResult.worktree_path` carry
+   the branch name and worktree path so the orchestrator knows where to
+   look.
+
+For ``current`` / ``sysops_local`` / ``none`` modes the workspace is a
+no-op and ``branch``/``worktree_path`` are ``None``.
 """
 
 from __future__ import annotations
 
+import logging
 from datetime import UTC, datetime
+from pathlib import Path
 from typing import Any
 
 from unlimited_mcp.agents.base import CLIAgent
@@ -39,6 +50,9 @@ from unlimited_mcp.jobs.result import ErrorBlock, JobResult
 from unlimited_mcp.jobs.runner_local import LocalRunner
 from unlimited_mcp.jobs.store import JobStore
 from unlimited_mcp.safety.argv_check import SafetyChecker, SafetyDecision
+from unlimited_mcp.workspace.manager import WorkspaceManager
+
+log = logging.getLogger(__name__)
 
 DEFAULT_TOOL_NAME = "delegate_to_agent"
 
@@ -53,11 +67,13 @@ class AgentRunner:
         knowledge: Knowledge | KnowledgeStore,
         local_runner: LocalRunner,
         safety: SafetyChecker,
+        workspace_manager: WorkspaceManager | None = None,
     ) -> None:
         self._config = config
         self._knowledge = knowledge
         self._local_runner = local_runner
         self._safety = safety
+        self._workspace_manager = workspace_manager
 
     def _get_config(self) -> Config:
         return self._config.get() if isinstance(self._config, ConfigStore) else self._config
@@ -79,31 +95,75 @@ class AgentRunner:
         confirm_token: str | None = None,
         tool: str = DEFAULT_TOOL_NAME,
     ) -> JobResult:
-        """Render the agent's argv, apply safety, and submit if allowed.
+        """Render the agent's argv, prepare workspace, apply safety, and submit.
 
         :class:`~unlimited_mcp.agents.base.AgentRenderError` from
         :meth:`CLIAgent.from_config` / :meth:`CLIAgent.render_argv` is allowed
         to propagate — those are programmer/config errors, distinct from the
         runtime safety pipeline.
         """
-        agent = CLIAgent.from_config(agent_name, self._get_config(), self._get_knowledge())
+        cfg = self._get_config()
+        kn = self._get_knowledge()
+
+        agent = CLIAgent.from_config(agent_name, cfg, kn)
+
+        # ---- workspace -------------------------------------------------------
+        workspace = None
+        effective_cwd = cwd
+        branch: str | None = None
+        worktree_path: str | None = None
+
+        if self._workspace_manager is not None:
+            agent_cfg = cfg.agents.get(agent_name)
+            workspace_preset = agent_cfg.workspace if agent_cfg else None
+            if workspace_preset and cwd is not None:
+                try:
+                    workspace = self._workspace_manager.create(
+                        workspace_preset,
+                        source=Path(cwd),
+                        label=agent_name.replace("_", "-"),
+                    )
+                    effective_cwd = str(workspace.path)
+                    branch = workspace.branch
+                    worktree_path = str(workspace.path) if workspace.branch else None
+                except Exception as exc:
+                    log.warning("Workspace creation failed for %r: %s", agent_name, exc)
+                    # Fall back to running in the original cwd without a worktree.
+                    workspace = None
+
+        # ---- render argv (uses effective_cwd for {cwd} token) ----------------
         argv = agent.render_argv(
             prompt=prompt,
             files=files,
             params_override=params_override,
-            cwd=cwd,
+            cwd=effective_cwd,
         )
-        decision = self._safety.check_run_command(argv, cwd=cwd, confirm_token=confirm_token)
+
+        # ---- safety ----------------------------------------------------------
+        decision = self._safety.check_run_command(
+            argv, cwd=effective_cwd, confirm_token=confirm_token
+        )
         if not decision.allowed:
+            if workspace is not None:
+                try:
+                    workspace.cleanup()
+                except Exception:
+                    pass
             return _decision_to_blocked_result(decision, agent_name=agent_name, tool=tool)
+
+        # ---- submit ----------------------------------------------------------
+        cleanup_fn = workspace.cleanup if workspace is not None else None
         return self._local_runner.submit(
             argv,
             label=agent_name,
             timeout_seconds=timeout_seconds,
             idempotency_key=idempotency_key,
             env_extra=env_extra,
-            cwd=cwd,
+            cwd=effective_cwd,
             tool=tool,
+            branch=branch,
+            worktree_path=worktree_path,
+            cleanup_fn=cleanup_fn,
         )
 
 

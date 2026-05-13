@@ -35,7 +35,9 @@ from unlimited_mcp.paths import (
     config_path,
     jobs_dir,
     knowledge_local_path,
+    state_dir,
 )
+from unlimited_mcp.workspace.manager import WorkspaceManager
 from unlimited_mcp.providers.base import Provider
 from unlimited_mcp.safety.argv_check import SafetyChecker
 from unlimited_mcp.tools.config_tools import (
@@ -108,7 +110,16 @@ def make_server(
     # Pass stores (not snapshots) so config changes made via MCP tools
     # (add_agent, add_allowed_root, …) are visible on the next tool call.
     safety = SafetyChecker(cfg_store, kn_store)
-    agent_runner = AgentRunner(config=cfg_store, knowledge=kn_store, local_runner=runner, safety=safety)
+    worktree_base = state_dir() / "work"
+    worktree_base.mkdir(parents=True, exist_ok=True)
+    workspace_mgr = WorkspaceManager(kn_store.get(), worktree_base)
+    agent_runner = AgentRunner(
+        config=cfg_store,
+        knowledge=kn_store,
+        local_runner=runner,
+        safety=safety,
+        workspace_manager=workspace_mgr,
+    )
 
     app = FastMCP(server_name)
 
