@@ -74,6 +74,7 @@ def delegate_to_agent(
     timeout_seconds: int = 600,
     idempotency_key: str | None = None,
     confirm_token: str | None = None,
+    workspace_override: str | None = None,
 ) -> JobResult:
     """Thin wrapper around :meth:`AgentRunner.submit`."""
     return agent_runner.submit(
@@ -86,6 +87,7 @@ def delegate_to_agent(
         timeout_seconds=timeout_seconds,
         idempotency_key=idempotency_key,
         confirm_token=confirm_token,
+        workspace_override=workspace_override,
     )
 
 

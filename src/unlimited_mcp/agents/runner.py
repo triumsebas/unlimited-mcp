@@ -93,6 +93,7 @@ class AgentRunner:
         timeout_seconds: int = 600,
         idempotency_key: str | None = None,
         confirm_token: str | None = None,
+        workspace_override: str | None = None,
         tool: str = DEFAULT_TOOL_NAME,
     ) -> JobResult:
         """Render the agent's argv, prepare workspace, apply safety, and submit.
@@ -115,7 +116,11 @@ class AgentRunner:
 
         if self._workspace_manager is not None:
             agent_cfg = cfg.agents.get(agent_name)
-            workspace_preset = agent_cfg.workspace if agent_cfg else None
+            # workspace_override="" or "none" explicitly disables worktree.
+            if workspace_override is not None:
+                workspace_preset = workspace_override if workspace_override not in ("", "none") else None
+            else:
+                workspace_preset = agent_cfg.workspace if agent_cfg else None
             if workspace_preset and cwd is not None:
                 try:
                     workspace = self._workspace_manager.create(

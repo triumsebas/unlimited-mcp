@@ -189,13 +189,18 @@ def make_server(
         timeout_seconds: int = 600,
         idempotency_key: str | None = None,
         confirm_token: str | None = None,
+        workspace: str | None = None,
     ) -> JobResult:
         """Delegate a coding task to a configured agent (aider, opencode, smolagents, ...).
 
         agent_name must match a key in config.agents. The agent runs in the
-        background; poll with get_job_result(job_id). Use workspace preset
-        'safe_dev' (git_worktree + leave_branch) for in-repo write tasks so
-        the agent never touches the main working tree directly.
+        background; poll with get_job_result(job_id).
+
+        workspace overrides the agent's default preset for this call:
+          - omit / null → use the agent's configured preset (e.g. 'safe_dev')
+          - 'safe_dev'  → git worktree + leave_branch (isolated coding task)
+          - 'none' or '' → no workspace management (scripts, analysis, non-repo tasks)
+          - 'read_only' → current dir, report only (audits)
 
         Example: delegate_to_agent(agent_name='aider_local',
                    prompt='add docstrings to all public functions',
@@ -212,6 +217,7 @@ def make_server(
             timeout_seconds=timeout_seconds,
             idempotency_key=idempotency_key,
             confirm_token=confirm_token,
+            workspace_override=workspace,
         )
 
     @app.tool()
