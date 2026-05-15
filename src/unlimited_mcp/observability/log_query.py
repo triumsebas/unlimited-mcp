@@ -91,7 +91,9 @@ def query_logs(
     level:      Filter by log level ("info", "warning", "error").
     tool:       Filter by MCP tool name (e.g. "run_command").
     job_id:     Filter by job identifier.
-    source:     "server" | "errors" | "all". Selects which log file(s) to read.
+    source:     "server" | "errors" | "audit" | "all". Selects which log file(s)
+                to read. "audit" reads ``audit/exec.jsonl`` (redacted argv, exit
+                codes, safety classification — no prompts or outputs).
     limit:      Maximum number of entries to return (newest wins).
     """
     since_dt: datetime | None = None
@@ -125,6 +127,15 @@ def query_logs(
                 e.setdefault("_source", "errors")
         all_entries.extend(entries)
         sources_read.append(str(errors_log))
+
+    if source in ("audit", "all"):
+        exec_log = audit_dir / "exec.jsonl"
+        entries = _read_jsonl(exec_log, since_dt=since_dt, level=None, tool=tool, job_id=job_id)
+        if entries:
+            for e in entries:
+                e.setdefault("_source", "audit")
+        all_entries.extend(entries)
+        sources_read.append(str(exec_log))
 
     # Sort by timestamp ascending, then take the last `limit` (newest)
     def _ts_key(e: dict[str, Any]) -> str:

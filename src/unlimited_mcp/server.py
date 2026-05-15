@@ -673,7 +673,9 @@ def make_server(
         level:  Filter by log level: "info", "warning", "error".
         tool:   Filter by MCP tool name, e.g. "run_command" or "delegate_to_agent".
         job_id: Filter by job identifier to see everything logged for one job.
-        source: "server" (default) — operational log; "errors" — errors.jsonl; "all" — both.
+        source: "server" (default) — operational log; "errors" — errors.jsonl;
+                "audit" — exec.jsonl (redacted argv, exit codes, safety class — no prompts/output);
+                "all" — all three.
         limit:  Maximum entries returned (newest wins). Default 50.
 
         Returns {ok, total_matched, returned, truncated, sources_read, entries}.

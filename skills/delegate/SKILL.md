@@ -278,3 +278,39 @@ In those cases, stay active and poll using ScheduleWakeup:
 - `result.diff_ref` — path to the patch file.
 - `result.raw_output_ref` — path to full stdout log (read only if needed).
 - `result.risk_level` — `low` / `medium` / `high` / `critical`.
+
+---
+
+## Verifying a new coding agent (agents that handle files and shell commands)
+
+Run these three tests before marking an agent as `verified: true` in knowledge.yaml.
+All three use `workspace="none"` and `add_allowed_root("/tmp")` first.
+
+**Test 1 — prompt in params (inline)**
+```python
+delegate_to_agent(agent_name, prompt='Say exactly: "<agent> ok"',
+                  workspace="none", timeout_seconds=60)
+```
+Pass: job completes, stdout contains the expected string.
+
+**Test 2 — prompt via file (large prompt, triggers stdin/file fallback)**
+Generate a prompt > 64 KB and delegate it. Confirms the agent's stdin/file
+delivery path works when the prompt is too large for an argv token.
+```python
+large_prompt = 'Say exactly: "<agent> file-prompt OK"\n' + 'x' * 70000
+delegate_to_agent(agent_name, prompt=large_prompt,
+                  workspace="none", timeout_seconds=60)
+```
+Pass: agent responds correctly despite the large input.
+
+**Test 3 — file write + delete in /tmp (confirms no skip-permissions needed)**
+```python
+delegate_to_agent(agent_name,
+    prompt='Create /tmp/<agent>_test.txt with content "<agent>-write OK", '
+           'then delete it, then say "<agent> file-write OK"',
+    workspace="none", timeout_seconds=90)
+```
+Pass: agent creates and deletes the file without prompting for confirmation.
+Fail: agent hangs waiting for a permission prompt → add the equivalent of
+`--dangerously-skip-permissions` / `--yolo` to the `command_template` in
+knowledge.yaml, or set it as a bool param defaulting to true.

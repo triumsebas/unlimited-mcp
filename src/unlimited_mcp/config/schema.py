@@ -150,6 +150,9 @@ class AgentConfig(_Strict):
     not_suitable_reason: str | None = None
     speed_tier: SpeedTier = "acceptable"
     params: dict[str, Any] = Field(default_factory=dict)
+    # Per-agent env vars injected into the worker subprocess.  Values may use
+    # ${VAR} syntax to reference the server's own environment at call time.
+    env_extra: dict[str, str] = Field(default_factory=dict)
     workspace: WorkspacePresetName | WorkspaceSpec | None = None
     supports_clarify: bool = True
     """Whether this agent reliably follows the file-based Q&A clarification

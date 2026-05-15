@@ -38,6 +38,8 @@ no-op and ``branch``/``worktree_path`` are ``None``.
 from __future__ import annotations
 
 import logging
+import os
+import re
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import Any
@@ -111,6 +113,16 @@ class AgentRunner:
 
         agent = CLIAgent.from_config(agent_name, cfg, kn)
 
+        # ---- env_extra: merge agent-level defaults with call-time overrides --
+        agent_cfg = cfg.agents.get(agent_name)
+        merged_env: dict[str, str] = {}
+        if agent_cfg and agent_cfg.env_extra:
+            for k, v in agent_cfg.env_extra.items():
+                merged_env[k] = re.sub(r"\$\{(\w+)\}", lambda m: os.environ.get(m.group(1), ""), v)
+        if env_extra:
+            merged_env.update(env_extra)
+        env_extra = merged_env or None
+
         # ---- workspace -------------------------------------------------------
         workspace = None
         effective_cwd = cwd
@@ -118,7 +130,6 @@ class AgentRunner:
         worktree_path: str | None = None
 
         if self._workspace_manager is not None:
-            agent_cfg = cfg.agents.get(agent_name)
             # workspace_override="" or "none" explicitly disables worktree.
             if workspace_override is not None:
                 workspace_preset = workspace_override if workspace_override not in ("", "none") else None

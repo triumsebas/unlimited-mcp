@@ -119,6 +119,59 @@ clis:
         default: null
         render: "--model-id {value}"
     verified: false
+  goose:
+    docs_url: "https://block.github.io/goose/"
+    install_hint: "curl -fsSL https://github.com/block/goose/releases/latest/download/install.sh | GOOSE_SKIP_UPDATE=1 bash"
+    # Inline prompts use -t; large prompts fall back to stdin via -i -
+    command_template: "goose run -t {prompt} --quiet"
+    stdin_command_template: "goose run -i - --quiet"
+    prompt_via: arg_with_stdin_fallback
+    params:
+      model:
+        type: str
+        default: null
+        render: "--model {value}"
+      provider:
+        type: str
+        default: null
+        render: "--provider {value}"
+    verified: false
+  hermes:
+    docs_url: "https://github.com/Josephrp/hermes-agent"
+    install_hint: "pip install hermes-agent"
+    # -q is single query (non-interactive); -Q suppresses banner/spinner for programmatic use
+    # --yolo skips tool-call confirmation prompts (equivalent to --dangerously-skip-permissions)
+    command_template: "hermes chat -q {prompt} -Q --yolo"
+    stdin_command_template: "hermes chat -Q --yolo"
+    prompt_via: arg_with_stdin_fallback
+    params:
+      model:
+        type: str
+        default: null
+        render: "--model {value}"
+      provider:
+        type: str
+        default: null
+        render: "--provider {value}"
+    verified: false
+  jcode:
+    docs_url: "https://jcode.ai/docs"
+    install_hint: "curl -fsSL https://jcode.ai/install.sh | bash"
+    # Prompt always goes as a positional arg; even large prompts work fine this way.
+    # --quiet suppresses token usage lines; --no-update prevents auto-updates mid-run.
+    # No skip-permissions flag needed: jcode executes tool calls without prompting.
+    command_template: "jcode run --quiet --no-update {prompt}"
+    prompt_via: arg
+    params:
+      provider:
+        type: str
+        default: null
+        render: "--provider {value}"
+      model:
+        type: str
+        default: null
+        render: "--model {value}"
+    verified: true
 
 # ---------------------------------------------------------------------------
 # LLM providers
