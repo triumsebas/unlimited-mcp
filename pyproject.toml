@@ -5,8 +5,13 @@ description = "MCP orchestration server: delegate work from frontier orchestrato
 readme = "README.md"
 license = "Apache-2.0"
 license-files = ["LICENSE"]
-authors = [{ name = "Sebastian Fernandez" }]
+authors = [{ name = "Sebastian Fernandez", email = "sebastian.fernandez@triumsistemas.com" }]
 requires-python = ">=3.11"
+
+[project.urls]
+Homepage = "https://github.com/triumsebas/unlimited-mcp"
+Repository = "https://github.com/triumsebas/unlimited-mcp"
+Issues = "https://github.com/triumsebas/unlimited-mcp/issues"
 keywords = [
     "mcp",
     "model-context-protocol",
@@ -15,7 +20,7 @@ keywords = [
     "delegation",
 ]
 classifiers = [
-    "Development Status :: 2 - Pre-Alpha",
+    "Development Status :: 3 - Alpha",
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.11",
     "Programming Language :: Python :: 3.12",
