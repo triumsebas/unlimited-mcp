@@ -93,8 +93,10 @@ class WorkspaceManager:
         if resolved.mode == "git_worktree":
             if source is None:
                 raise ValueError("git_worktree mode requires `source` (path to a git repo)")
-            target = self.base_dir / _make_label(label)
-            git_handle = create_git_worktree(Path(source), label, target)
+            unique_label = _make_label(label)
+            target = self.base_dir / unique_label
+            branch_name = f"unlimited-mcp/{unique_label}"
+            git_handle = create_git_worktree(Path(source), branch_name, target)
             return Workspace(
                 spec=resolved,
                 path=git_handle.path,

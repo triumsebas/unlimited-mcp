@@ -197,3 +197,32 @@ class SafetyChecker:
             risk_level=_RISK_FROM_CLASS[cls],
             detected_paths=paths,
         )
+
+    def check_run_shell(
+        self,
+        *,
+        cwd: str | None = None,
+    ) -> SafetyDecision:
+        """Safety check for run_shell: always mutating, cwd must be in allowed_roots."""
+        if cwd:
+            offender = check_paths(
+                [cwd],
+                self.config.allowed_roots,
+                self.config.deny_paths,
+            )
+            if offender is not None:
+                return SafetyDecision(
+                    allowed=False,
+                    safety_class="mutating",
+                    risk_level="medium",
+                    error_code="OUT_OF_ROOT",
+                    error_hint=(
+                        f"Path {offender!r} is outside allowed_roots. "
+                        f"Call add_allowed_root({offender!r}) or use a different cwd."
+                    ),
+                )
+        return SafetyDecision(
+            allowed=True,
+            safety_class="mutating",
+            risk_level="medium",
+        )

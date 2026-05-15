@@ -158,21 +158,33 @@ class JobStore:
         if d.exists():
             shutil.rmtree(d)
 
-    def cleanup_older_than(self, days: int) -> int:
-        """Garbage-collect jobs whose directory mtime is older than
-        ``days`` days. Returns the count removed."""
+    def cleanup_older_than(self, days: int, *, keep_unseen: bool = True) -> list[str]:
+        """Garbage-collect jobs whose directory mtime is older than *days* days.
+
+        When *keep_unseen* is ``True`` (default), terminal jobs whose
+        ``result.json`` has ``seen_at=null`` are spared — they are still
+        "unread" in the orchestrator's inbox and should not be silently evicted.
+
+        Returns the list of evicted job IDs.
+        """
         if not self.base_dir.exists():
-            return 0
+            return []
         cutoff = datetime.now(UTC) - timedelta(days=days)
-        removed = 0
+        evicted: list[str] = []
         for p in self.base_dir.iterdir():
             if not p.is_dir() or p.name.startswith("."):
                 continue
             mtime = datetime.fromtimestamp(p.stat().st_mtime, tz=UTC)
-            if mtime < cutoff:
-                shutil.rmtree(p)
-                removed += 1
-        return removed
+            if mtime >= cutoff:
+                continue
+            if keep_unseen:
+                result = self.read_result(p.name)
+                terminal = ("completed", "failed", "cancelled")
+                if result and result.status in terminal and result.seen_at is None:
+                    continue  # unseen terminal job — spare it
+            shutil.rmtree(p)
+            evicted.append(p.name)
+        return evicted
 
 
 def _atomic_write_json(path: Path, data: Any) -> None:

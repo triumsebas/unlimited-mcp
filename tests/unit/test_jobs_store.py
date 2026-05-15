@@ -170,7 +170,7 @@ def test_cleanup_older_than(tmp_path: Path) -> None:
     os.utime(tmp_path / "old", (old_ts, old_ts))
 
     removed = store.cleanup_older_than(days=7)
-    assert removed == 1
+    assert len(removed) == 1
     assert not (tmp_path / "old").exists()
     assert (tmp_path / "fresh").exists()
 

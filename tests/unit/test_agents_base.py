@@ -113,7 +113,7 @@ def test_render_per_call_override_beats_config() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"git": False, "model": "m1"}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi", params_override={"git": True})
+    argv = agent.render_argv(prompt="hi", params_override={"git": True}).argv
     assert "--git" in argv
     assert "--no-git" not in argv
 
@@ -127,7 +127,7 @@ def test_template_substitutes_prompt_as_single_token() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"model": "m1"}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="add docstrings to all functions")
+    argv = agent.render_argv(prompt="add docstrings to all functions").argv
     # Multi-word prompt stays one argv token
     assert "add docstrings to all functions" in argv
 
@@ -136,7 +136,7 @@ def test_template_expands_files() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"model": "m1"}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi", files=["foo.py", "bar.py"])
+    argv = agent.render_argv(prompt="hi", files=["foo.py", "bar.py"]).argv
     assert "foo.py" in argv
     assert "bar.py" in argv
 
@@ -145,7 +145,7 @@ def test_template_empty_files_collapses() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"model": "m1"}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi", files=[])
+    argv = agent.render_argv(prompt="hi", files=[]).argv
     assert all("{files}" not in tok for tok in argv)
 
 
@@ -168,14 +168,14 @@ def test_template_cwd_substitution() -> None:
     )
     cfg = _make_config({"a": {"cli": "tool", "params": {}}})
     agent = CLIAgent.from_config("a", cfg, kn)
-    assert agent.render_argv(cwd="/work") == ["mytool", "--in", "/work"]
+    assert agent.render_argv(cwd="/work").argv == ["mytool", "--in", "/work"]
 
 
 def test_template_cwd_skipped_when_none() -> None:
     kn = _make_knowledge({"tool": CliKnowledge(command_template="mytool {cwd}", params={})})
     cfg = _make_config({"a": {"cli": "tool", "params": {}}})
     agent = CLIAgent.from_config("a", cfg, kn)
-    assert agent.render_argv() == ["mytool"]
+    assert agent.render_argv().argv == ["mytool"]
 
 
 # ---------------------------------------------------------------------------
@@ -195,7 +195,7 @@ def test_required_param_satisfied_by_override() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi", params_override={"model": "gpt-4o"})
+    argv = agent.render_argv(prompt="hi", params_override={"model": "gpt-4o"}).argv
     assert "--model" in argv
     assert "gpt-4o" in argv
 
@@ -209,7 +209,7 @@ def test_bool_true_renders_true_branch() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"model": "m"}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi", params_override={"git": True})
+    argv = agent.render_argv(prompt="hi", params_override={"git": True}).argv
     assert "--git" in argv
     assert "--no-git" not in argv
 
@@ -218,7 +218,7 @@ def test_bool_false_renders_false_branch() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"model": "m"}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi", params_override={"git": False})
+    argv = agent.render_argv(prompt="hi", params_override={"git": False}).argv
     assert "--no-git" in argv
     assert "--git" not in argv
 
@@ -228,7 +228,7 @@ def test_bool_one_sided_render_skips_when_missing_key() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"model": "m", "yes": False}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi")
+    argv = agent.render_argv(prompt="hi").argv
     assert "--yes" not in argv
 
 
@@ -241,7 +241,7 @@ def test_scalar_str_param_renders_two_tokens() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"model": "openai/gpt-4o"}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi")
+    argv = agent.render_argv(prompt="hi").argv
     i = argv.index("--model")
     assert argv[i + 1] == "openai/gpt-4o"
 
@@ -257,7 +257,7 @@ def test_list_param_repeats_per_element() -> None:
     )
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi")
+    argv = agent.render_argv(prompt="hi").argv
     # Two --read flags, one per file
     assert argv.count("--read") == 2
     assert "a.md" in argv and "b.md" in argv
@@ -267,7 +267,7 @@ def test_metadata_only_param_never_rendered() -> None:
     cfg = _make_config({"a": {"cli": "aider", "params": {"model": "m", "label": "ignored"}}})
     kn = _make_knowledge({"aider": _aider_knowledge()})
     agent = CLIAgent.from_config("a", cfg, kn)
-    argv = agent.render_argv(prompt="hi")
+    argv = agent.render_argv(prompt="hi").argv
     assert "ignored" not in argv
     assert "label" not in argv
 
@@ -338,5 +338,5 @@ def test_substitute_value_combined() -> None:
 
 
 def test_expand_template_files_only() -> None:
-    out = _expand_template("cmd {files}", prompt=None, files=["a", "b"], cwd=None)
+    out = _expand_template("cmd {files}", prompt=None, files=["a", "b"], cwd=None, include_prompt_token=False)
     assert out == ["cmd", "a", "b"]

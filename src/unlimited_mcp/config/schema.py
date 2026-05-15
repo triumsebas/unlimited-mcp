@@ -73,6 +73,19 @@ class SafetyConfig(_Strict):
     confirm_token_ttl_seconds: int = 300
 
 
+class ClarifyConfig(_Strict):
+    """Limits for the worker clarification-rounds protocol.
+
+    When ``delegate_to_agent`` is called with ``clarify_rounds > 0`` the
+    agent is given a file-based Q&A preamble before it starts work.  These
+    two limits cap how long that phase can run regardless of the caller's
+    ``clarify_rounds`` value.
+    """
+
+    max_rounds: int = 5
+    max_total_seconds: int = 300
+
+
 # ---------------------------------------------------------------------------
 # Hosts
 # ---------------------------------------------------------------------------
@@ -108,9 +121,10 @@ HostConfig = Annotated[
 
 
 class ProviderConfig(_Strict):
-    type: Literal["openai_compat", "ollama", "anthropic"]
+    type: Literal["openai_compat", "ollama", "mlx_lm", "gemini", "groq", "openrouter", "anthropic"]
     model: str
     base_url: str | None = None
+    api_key: str | None = None
     api_key_env: str | None = None
     api_base_env: str | None = None
     exec_host: str = "local"
@@ -137,6 +151,11 @@ class AgentConfig(_Strict):
     speed_tier: SpeedTier = "acceptable"
     params: dict[str, Any] = Field(default_factory=dict)
     workspace: WorkspacePresetName | WorkspaceSpec | None = None
+    supports_clarify: bool = True
+    """Whether this agent reliably follows the file-based Q&A clarification
+    protocol.  Set to ``False`` for local models or CLIs known to ignore the
+    preamble.  When ``False`` and ``clarify_rounds > 0`` is requested, the
+    runner skips the Q&A phase and adds a warning to the JobResult."""
 
 
 # ---------------------------------------------------------------------------
@@ -146,8 +165,16 @@ class AgentConfig(_Strict):
 
 
 class QueueConfig(_Strict):
+    type: str = "local_ts"
+    """Queue backend type.
+
+    ``"local_ts"``   — task-spooler running on this machine (default).
+    ``"remote_ts"``  — reserved for future remote task-spooler support.
+    """
     socket: str | None = None
+    """Override the TS_SOCKET path.  Defaults to ``state_dir/<name>.sock``."""
     slots: int = 1
+    """Maximum number of simultaneous jobs for this queue."""
 
 
 # ---------------------------------------------------------------------------
@@ -158,6 +185,7 @@ class QueueConfig(_Strict):
 class Config(_Strict):
     schema_version: int = 1
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
+    clarify: ClarifyConfig = Field(default_factory=ClarifyConfig)
     allowed_roots: list[str] = Field(default_factory=list)
     deny_paths: list[str] = Field(default_factory=list)
     hosts: dict[str, HostConfig] = Field(default_factory=dict)
@@ -191,6 +219,28 @@ class CliKnowledge(_Strict):
     docs_url: str | None = None
     install_hint: str | None = None
     command_template: str
+    stdin_command_template: str | None = None
+    prompt_via: str = "arg"
+    """How the prompt is delivered to this CLI.
+
+    ``"arg"``
+        Inline in argv via the ``{prompt}`` token in *command_template*.
+        Default for most CLIs.  Subject to OS ``ARG_MAX`` (~1 MB on macOS).
+
+    ``"stdin"``
+        Written to ``job_dir/stdin.txt`` and piped as stdin.  The template
+        must NOT contain ``{prompt}``.  Use for CLIs like ``opencode run``,
+        ``claude``, ``codex exec -`` that read the task from stdin.
+
+    ``"file"``
+        Written to ``job_dir/prompt.txt`` and the path is substituted for
+        the ``{prompt_file}`` token in *command_template*.  Use for CLIs
+        that accept a prompt file via a flag (e.g. ``agent -f {prompt_file}``).
+
+    ``"arg_with_stdin_fallback"``
+        Uses ``"arg"`` for prompts ≤ 64 KB; falls back to ``"stdin"`` for
+        larger prompts.  The CLI must support stdin in that case.
+    """
     params: dict[str, ParamSpec] = Field(default_factory=dict)
     knowledge_required: list[str] = Field(default_factory=list)
     verified: bool = False
@@ -219,7 +269,7 @@ class ToolKnowledge(_Strict):
 
 
 class ProviderKnowledge(_Strict):
-    type: Literal["openai_compat", "ollama", "anthropic"]
+    type: Literal["openai_compat", "ollama", "mlx_lm", "gemini", "groq", "openrouter", "anthropic"]
     docs_url: str | None = None
     default_base_url: str | None = None
     well_known_models: list[str] = Field(default_factory=list)

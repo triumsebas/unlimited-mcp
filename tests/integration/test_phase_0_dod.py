@@ -141,7 +141,7 @@ def test_phase_0_definition_of_done(tmp_path: Path) -> None:
     try:
         assert workspace.spec.mode == "git_worktree"
         assert workspace.path.exists()
-        assert workspace.branch == "add-docstring"
+        assert workspace.branch and workspace.branch.startswith("unlimited-mcp/add-docstring")
         # The worker would now operate inside workspace.path. Simulate an edit.
         edited = workspace.path / "primes.py"
         edited.write_text(
@@ -191,7 +191,7 @@ def test_phase_0_definition_of_done(tmp_path: Path) -> None:
         loaded = store.read_result(job_id)
         assert loaded is not None
         assert loaded.ok is True
-        assert loaded.branch == "add-docstring"
+        assert loaded.branch and loaded.branch.startswith("unlimited-mcp/add-docstring")
         assert loaded.worktree_path == str(workspace.path)
         assert loaded.commands_run[0].safety_class == "mutating"
     finally:

@@ -46,7 +46,7 @@ from unlimited_mcp.agents.base import CLIAgent
 from unlimited_mcp.config.knowledge import KnowledgeStore
 from unlimited_mcp.config.loader import ConfigStore
 from unlimited_mcp.config.schema import Config, Knowledge
-from unlimited_mcp.jobs.result import ErrorBlock, JobResult
+from unlimited_mcp.jobs.result import ErrorBlock, JobResult, JobWarning
 from unlimited_mcp.jobs.runner_local import LocalRunner
 from unlimited_mcp.jobs.store import JobStore
 from unlimited_mcp.safety.argv_check import SafetyChecker, SafetyDecision
@@ -94,7 +94,10 @@ class AgentRunner:
         idempotency_key: str | None = None,
         confirm_token: str | None = None,
         workspace_override: str | None = None,
+        tag: str | None = None,
+        runner_override: Any | None = None,
         tool: str = DEFAULT_TOOL_NAME,
+        clarify_rounds: int = 0,
     ) -> JobResult:
         """Render the agent's argv, prepare workspace, apply safety, and submit.
 
@@ -136,8 +139,35 @@ class AgentRunner:
                     # Fall back to running in the original cwd without a worktree.
                     workspace = None
 
+        # ---- clarify preamble ------------------------------------------------
+        warnings: list[JobWarning] = []
+        pre_job_id: str | None = None
+
+        if clarify_rounds > 0:
+            agent_cfg = cfg.agents.get(agent_name)
+            if agent_cfg is not None and not agent_cfg.supports_clarify:
+                warnings.append(JobWarning(
+                    code="CLARIFY_NOT_SUPPORTED",
+                    message=f"Agent {agent_name!r} has supports_clarify=False; Q&A phase skipped.",
+                    hint="Set supports_clarify=true in config.yaml if the agent has been verified.",
+                ))
+                clarify_rounds = 0
+            else:
+                clarify_cfg = cfg.clarify
+                effective_rounds = min(clarify_rounds, clarify_cfg.max_rounds)
+                pre_job_id = JobStore.make_job_id(tool)
+                active_runner = runner_override if runner_override is not None else self._local_runner
+                active_runner._store.create(pre_job_id)
+                q_dir = active_runner._store.questions_dir(pre_job_id)
+                prompt = _build_clarify_prompt(
+                    original_prompt=prompt or "",
+                    questions_dir=q_dir,
+                    max_rounds=effective_rounds,
+                    max_total_seconds=clarify_cfg.max_total_seconds,
+                )
+
         # ---- render argv (uses effective_cwd for {cwd} token) ----------------
-        argv = agent.render_argv(
+        render = agent.render_argv(
             prompt=prompt,
             files=files,
             params_override=params_override,
@@ -146,7 +176,7 @@ class AgentRunner:
 
         # ---- safety ----------------------------------------------------------
         decision = self._safety.check_run_command(
-            argv, cwd=effective_cwd, confirm_token=confirm_token
+            render.argv, cwd=effective_cwd, confirm_token=confirm_token
         )
         if not decision.allowed:
             if workspace is not None:
@@ -158,9 +188,11 @@ class AgentRunner:
 
         # ---- submit ----------------------------------------------------------
         cleanup_fn = workspace.cleanup if workspace is not None else None
-        return self._local_runner.submit(
-            argv,
+        active_runner = runner_override if runner_override is not None else self._local_runner
+        result = active_runner.submit(
+            render.argv,
             label=agent_name,
+            tag=tag,
             timeout_seconds=timeout_seconds,
             idempotency_key=idempotency_key,
             env_extra=env_extra,
@@ -169,12 +201,65 @@ class AgentRunner:
             branch=branch,
             worktree_path=worktree_path,
             cleanup_fn=cleanup_fn,
+            stdin_content=render.stdin_content,
+            prompt_file_content=render.prompt_file_content,
+            job_id=pre_job_id,
         )
+        if warnings:
+            result = result.model_copy(update={"warnings": result.warnings + warnings})
+        return result
 
 
 # ---------------------------------------------------------------------------
 # Internal helpers
 # ---------------------------------------------------------------------------
+
+
+def _build_clarify_prompt(
+    original_prompt: str,
+    questions_dir: Path,
+    max_rounds: int,
+    max_total_seconds: int,
+) -> str:
+    """Prepend the file-based Q&A clarification protocol to the original prompt.
+
+    The agent writes all questions for a round to a single JSON array file,
+    waits for an answers file, then proceeds.  If the total wait exceeds
+    *max_total_seconds* the agent must write a timeout marker and exit 2.
+    """
+    poll_interval = 3
+    return f"""## Pre-task clarification protocol
+
+Before writing any code or making any decisions, gather all the information you need by asking questions via files.
+
+**Rules:**
+- Write ALL your questions for a round at once in a single file — do not ask one at a time.
+- Only use a second round if the first answers revealed something genuinely unexpected.
+- Do not assume. Do not invent answers.
+- If you receive an answer containing "STOP", proceed immediately with what you know.
+- Only ask what would actually change your implementation.
+- Maximum {max_rounds} rounds. Total wait budget: {max_total_seconds}s.
+
+**Protocol for round N (format N as a zero-padded 3-digit number: 001, 002, ...):**
+
+Step 1 — write your questions to:
+  {questions_dir}/round_NNN_questions.json
+  Format: [{{"id": 1, "question": "...", "options": ["A: ...", "B: ..."], "why": "one line on why this changes the implementation"}}, ...]
+
+Step 2 — poll every {poll_interval}s for answers at:
+  {questions_dir}/round_NNN_answers.json
+  Print "round N: waiting for answers..." each iteration.
+  If the file does not appear within your remaining time budget, write:
+  {questions_dir}/timeout.json  ← {{"last_round": N, "unanswered_questions": [...]}}
+  Then exit with code 2.
+
+Step 3 — read the answers. If you need a follow-up round (and rounds remain), write round N+1. Otherwise proceed with the task.
+
+---
+
+## Your task
+
+{original_prompt}"""
 
 
 def _decision_to_blocked_result(

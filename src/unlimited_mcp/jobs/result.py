@@ -111,8 +111,10 @@ class JobResult(_Strict):
     job_id: str
     status: JobStatus
     tool: str
+    tag: str | None = None                # opaque orchestrator label; filter with list_jobs(tag=...)
     started_at: datetime
     finished_at: datetime | None = None
+    seen_at: datetime | None = None       # stamped by get_job_result on first read of a terminal job
     duration_ms: int | None = None
 
     summary: str | None = None

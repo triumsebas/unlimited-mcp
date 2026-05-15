@@ -96,6 +96,7 @@ class LocalRunner:
         argv: list[str],
         *,
         label: str = "",
+        tag: str | None = None,
         timeout_seconds: int = 600,
         idempotency_key: str | None = None,
         env_extra: dict[str, str] | None = None,
@@ -104,6 +105,9 @@ class LocalRunner:
         branch: str | None = None,
         worktree_path: str | None = None,
         cleanup_fn: Callable[[], None] | None = None,
+        stdin_content: str | None = None,
+        prompt_file_content: str | None = None,
+        job_id: str | None = None,
     ) -> JobResult:
         """Spawn *argv* in the background and return immediately.
 
@@ -120,7 +124,7 @@ class LocalRunner:
                 if existing and existing.status not in ("failed", "cancelled"):
                     return existing
 
-        job_id = JobStore.make_job_id(tool)
+        job_id = job_id or JobStore.make_job_id(tool)
         started_at = datetime.now(UTC)
         self._store.create(job_id)
         self._store.write_meta(
@@ -128,12 +132,30 @@ class LocalRunner:
             {
                 "argv": argv,
                 "label": label,
+                "tag": tag,
                 "tool": tool,
                 "cwd": cwd,
                 "timeout_seconds": timeout_seconds,
                 "idempotency_key": idempotency_key,
             },
         )
+
+        job_dir = self._store.job_dir(job_id)
+
+        # Resolve prompt_file: write content and substitute {prompt_file} in argv.
+        if prompt_file_content is not None:
+            pf = job_dir / "prompt.txt"
+            pf.write_text(prompt_file_content, encoding="utf-8")
+            argv = [str(pf) if tok == "{prompt_file}" else tok for tok in argv]
+
+        # Resolve stdin: write to job_dir/stdin.txt and open as pipe.
+        stdin_fh: BinaryIO | int
+        if stdin_content is not None:
+            sf = job_dir / "stdin.txt"
+            sf.write_text(stdin_content, encoding="utf-8")
+            stdin_fh = sf.open("rb")
+        else:
+            stdin_fh = subprocess.DEVNULL
 
         stdout_path = self._store.stdout_path(job_id)
         stderr_path = self._store.stderr_path(job_id)
@@ -143,13 +165,16 @@ class LocalRunner:
         env = {**os.environ, **(env_extra or {})}
         proc: subprocess.Popen[bytes] = subprocess.Popen(
             argv,
-            stdin=subprocess.DEVNULL,
+            stdin=stdin_fh,
             stdout=stdout_fh,
             stderr=stderr_fh,
             env=env,
             cwd=cwd,
             start_new_session=True,
         )
+        # Close our handle to stdin.txt after Popen (child has its own fd).
+        if stdin_content is not None and hasattr(stdin_fh, "close"):
+            stdin_fh.close()  # type: ignore[union-attr]
 
         _write_state(
             self._state_path(job_id),
@@ -166,6 +191,7 @@ class LocalRunner:
             job_id=job_id,
             status="running",
             tool=tool,
+            tag=tag,
             started_at=started_at,
             summary=label or None,
             branch=branch,

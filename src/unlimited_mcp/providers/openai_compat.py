@@ -78,14 +78,14 @@ class OpenAICompatProvider:
             "messages": messages,
             "max_tokens": max_tokens,
         }
+        headers: dict[str, str] = {"Content-Type": "application/json"}
+        if self._api_key:
+            headers["Authorization"] = f"Bearer {self._api_key}"
         try:
             resp = self._client.post(
                 f"{self._base_url}/chat/completions",
                 json=payload,
-                headers={
-                    "Authorization": f"Bearer {self._api_key}",
-                    "Content-Type": "application/json",
-                },
+                headers=headers,
                 timeout=timeout_seconds,
             )
         except httpx.TimeoutException as exc:

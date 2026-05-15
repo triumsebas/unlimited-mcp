@@ -57,7 +57,7 @@ def test_git_worktree_mode_creates_worktree(tmp_path: Path) -> None:
         assert ws.spec.mode == "git_worktree"
         assert ws.spec.result == "leave_branch"
         assert ws.path.exists()
-        assert ws.branch == "docstrings"
+        assert ws.branch and ws.branch.startswith("unlimited-mcp/docstrings")
         # The worktree carries the repo's content.
         assert (ws.path / "README.md").read_text(encoding="utf-8") == "hi\n"
     finally:

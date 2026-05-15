@@ -1,4 +1,4 @@
-"""MCP tool functions: run_command, delegate_to_agent, run_and_summarize.
+"""MCP tool functions: run_command, run_shell, delegate_to_agent, run_and_summarize.
 
 These are pure Python functions — no MCP SDK import, no global state.
 The server wires them up as tools in a later phase; dependencies are injected
@@ -75,6 +75,9 @@ def delegate_to_agent(
     idempotency_key: str | None = None,
     confirm_token: str | None = None,
     workspace_override: str | None = None,
+    tag: str | None = None,
+    runner_override: Any | None = None,
+    clarify_rounds: int = 0,
 ) -> JobResult:
     """Thin wrapper around :meth:`AgentRunner.submit`."""
     return agent_runner.submit(
@@ -88,6 +91,67 @@ def delegate_to_agent(
         idempotency_key=idempotency_key,
         confirm_token=confirm_token,
         workspace_override=workspace_override,
+        tag=tag,
+        runner_override=runner_override,
+        clarify_rounds=clarify_rounds,
+    )
+
+
+def run_shell(
+    script: str,
+    *,
+    safety: SafetyChecker,
+    runner: LocalRunner,
+    interpreter: str = "bash",
+    i_understand_this_runs_a_shell_script: bool = False,
+    cwd: str | None = None,
+    env_extra: dict[str, str] | None = None,
+    timeout_seconds: int = 60,
+    tool: str = "run_shell",
+) -> JobResult:
+    """Run *script* via *interpreter* after the safety pipeline.
+
+    Unlike ``run_command``, the script is passed verbatim to the shell, so
+    pipes, redirections, loops, and expansions all work.  The trade-off is
+    that static argv classification is impossible — the job is always at
+    least ``mutating``.
+
+    ``i_understand_this_runs_a_shell_script`` must be ``True``; it exists so
+    callers cannot trigger shell execution accidentally.
+    """
+    if not i_understand_this_runs_a_shell_script:
+        now = datetime.now(UTC)
+        return JobResult(
+            ok=False,
+            job_id=JobStore.make_job_id(tool),
+            status="failed",
+            tool=tool,
+            started_at=now,
+            finished_at=now,
+            risk_level="medium",
+            error=ErrorBlock(
+                code="SHELL_SCRIPT_OPT_IN_REQUIRED",
+                message="i_understand_this_runs_a_shell_script must be True.",
+                hint=(
+                    "Set i_understand_this_runs_a_shell_script=True to confirm you "
+                    "intend to run an arbitrary shell script. Unlike run_command, "
+                    "the script bypasses static safety classification."
+                ),
+            ),
+            summary="Opt-in flag not set; call was not executed.",
+        )
+
+    decision = safety.check_run_shell(cwd=cwd)
+    if not decision.allowed:
+        return _blocked_result(decision, tool=tool)
+
+    argv = [interpreter, "-c", script]
+    return runner.submit(
+        argv,
+        cwd=cwd,
+        env_extra=env_extra,
+        timeout_seconds=timeout_seconds,
+        tool=tool,
     )
 
 

@@ -141,3 +141,6 @@ local/
 .pdm-build/
 .pixi
 __pypackages__/
+
+# Generated local scripts with hardcoded venv paths
+bin/

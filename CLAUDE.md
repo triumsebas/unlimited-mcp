@@ -142,10 +142,45 @@ while True:
 
 ---
 
+## Worker clarification rounds (`clarify_rounds`)
+
+Some tasks benefit from the agent asking questions before starting work rather
+than making wrong assumptions that require a full rewrite.  Pass
+`clarify_rounds=N` to `delegate_to_agent` to enable this.
+
+```python
+delegate_to_agent(
+    agent_name='opencode_kimi',
+    prompt='add notifications to the platform',
+    clarify_rounds=1,   # 0 = no Q&A (default); 1-5 = up to N batch rounds
+)
+```
+
+The agent writes all its questions at once per round to a file in the job dir,
+waits for answers (max 300 s total), then proceeds.  If the job times out
+waiting for an answer it exits cleanly with code 2; inspect the job dir for the
+pending question and use `resume_agent_task` to relaunch with context injected.
+
+**Use `clarify_rounds >= 1` only when ALL of these are true:**
+
+- Design or planning task (architecture, schema, API surface, tech choices)
+- OR the task is long enough that wrong assumptions would waste significant time
+
+**Use `clarify_rounds=0` (default) when ANY of these is true:**
+
+- Execution of commands or administrative task (no design decisions needed)
+- The task is short enough that it is cheaper to relaunch than to spend time on Q&A
+- The prompt already names specific files, functions, or a clear acceptance criterion
+
+Maximum: 5 rounds, 300 s total wait.  `cleanup_jobs` removes question/answer
+files together with the rest of the job directory.
+
+---
+
 ## Phase 2 (coming)
 
 - `run_shell(script)` — explicit shell execution with audit log
-- Worker questions (agent asks orchestrator mid-job)
+- `clarify_rounds` full implementation: `get_worker_questions`, `answer_worker_questions`, `resume_agent_task`
 - `ts` task-spooler backend for durable jobs across MCP restarts
 - `smart_submit` routing
 

@@ -3,8 +3,8 @@
 A :class:`CLIAgent` is the resolved view of one agent in ``config.yaml``:
 the CLI binary it wraps (from ``knowledge.yaml.clis``) plus the merged
 parameter values that should drive its invocation.  The single public
-operation is :meth:`CLIAgent.render_argv`, which produces the final argv
-list ready for :class:`~unlimited_mcp.hosts.local.LocalHost.run`.
+operation is :meth:`CLIAgent.render_argv`, which produces a
+:class:`RenderResult` ready for submission to a runner.
 
 Merge precedence (lowest → highest)
 -----------------------------------
@@ -14,43 +14,75 @@ Merge precedence (lowest → highest)
 
 Template format (``CliKnowledge.command_template``)
 ---------------------------------------------------
-The template is :func:`shlex.split` into tokens.  Three *whole-token*
-placeholders are recognized:
+The template is :func:`shlex.split` into tokens.  Whole-token placeholders:
 
-* ``{prompt}`` — replaced verbatim with the prompt (one token).  Raises
-  :class:`AgentRenderError` if referenced but ``prompt`` is ``None``.
-* ``{files}`` — expanded to ``len(files)`` tokens, one per file.  Empty
-  list collapses to zero tokens.
-* ``{cwd}``   — replaced with the working directory; collapses to zero
-  tokens when ``cwd`` is ``None``.
+* ``{prompt}``      — inline prompt token (``prompt_via="arg"`` only).
+* ``{prompt_file}`` — replaced with the path of ``job_dir/prompt.txt``
+                      by the runner (``prompt_via="file"`` only).
+* ``{files}``       — expanded to ``len(files)`` tokens, one per file.
+* ``{cwd}``         — working directory; collapses to zero tokens when None.
 
-In-token interpolation is intentionally **not** supported.  Quoting is the
-shell's job; we never pass through one.
+Prompt delivery modes (``CliKnowledge.prompt_via``)
+---------------------------------------------------
+* ``"arg"``                    — ``{prompt}`` in argv (default).
+* ``"stdin"``                  — written to ``job_dir/stdin.txt``, piped
+                                 as stdin; template has no ``{prompt}``.
+* ``"file"``                   — written to ``job_dir/prompt.txt``;
+                                 template uses ``{prompt_file}``.
+* ``"arg_with_stdin_fallback"``— arg up to 64 KB, stdin beyond that.
+
+In-token interpolation is intentionally **not** supported.
 
 Param render rules (``ParamSpec.render``)
 -----------------------------------------
 * ``""`` or ``None`` → metadata-only param, never appears in argv.
 * ``ParamSpec.type == "bool"``       → ``render`` must be a ``dict`` like
-  ``{"true": "--git", "false": "--no-git"}``.  Missing keys produce zero
-  tokens.  The flag string is ``shlex.split`` so multi-token flags
-  (``"--option arg"``) work.
+  ``{"true": "--git", "false": "--no-git"}``.
 * ``ParamSpec.type in {"str", "int"}`` → ``render`` is a string template;
-  it is ``shlex.split`` first, then ``{value}`` is replaced inside each
-  resulting token.
+  ``{value}`` is replaced inside each token.
 * ``ParamSpec.type == "list[str]"``  → same template, applied per element.
 """
 
 from __future__ import annotations
 
 import shlex
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from typing import Any
 
 from unlimited_mcp.config.schema import Config, Knowledge, ParamSpec
 
+_STDIN_THRESHOLD = 64 * 1024  # bytes; above this, arg_with_stdin_fallback uses stdin
+
 
 class AgentRenderError(ValueError):
     """Raised when an agent invocation cannot be rendered to argv."""
+
+
+@dataclass(frozen=True)
+class RenderResult:
+    """Output of :meth:`CLIAgent.render_argv`.
+
+    Attributes
+    ----------
+    argv:
+        Final command + flags.  For ``prompt_via="file"`` the literal token
+        ``{prompt_file}`` is left in place; the runner substitutes the real
+        path after writing ``job_dir/prompt.txt``.
+    stdin_content:
+        Text to pipe as stdin (``"stdin"`` / ``"arg_with_stdin_fallback"``
+        modes).  ``None`` when not applicable.
+    prompt_file_content:
+        Text to write to ``job_dir/prompt.txt`` (``"file"`` mode).
+        ``None`` when not applicable.
+    prompt_via:
+        The effective delivery mode used (resolved from
+        ``arg_with_stdin_fallback`` to either ``"arg"`` or ``"stdin"``).
+    """
+
+    argv: list[str]
+    stdin_content: str | None = None
+    prompt_file_content: str | None = None
+    prompt_via: str = "arg"
 
 
 @dataclass(frozen=True)
@@ -64,6 +96,8 @@ class CLIAgent:
     name: str
     cli: str
     command_template: str
+    stdin_command_template: str | None
+    prompt_via: str
     params_catalog: dict[str, ParamSpec]
     params_active: dict[str, Any]
 
@@ -101,6 +135,8 @@ class CLIAgent:
             name=name,
             cli=agent_cfg.cli,
             command_template=cli_kn.command_template,
+            stdin_command_template=cli_kn.stdin_command_template,
+            prompt_via=cli_kn.prompt_via,
             params_catalog=dict(cli_kn.params),
             params_active=merged,
         )
@@ -114,8 +150,8 @@ class CLIAgent:
         files: list[str] | None = None,
         params_override: dict[str, Any] | None = None,
         cwd: str | None = None,
-    ) -> list[str]:
-        """Render this agent's invocation to a final argv list.
+    ) -> RenderResult:
+        """Render this agent's invocation to a :class:`RenderResult`.
 
         Param order in the produced argv is: tokens from ``command_template``
         first (in source order), followed by rendered params in the order
@@ -129,9 +165,26 @@ class CLIAgent:
             if spec.required and params.get(pname) is None:
                 raise AgentRenderError(f"Required param {pname!r} missing for agent {self.name!r}.")
 
+        # Resolve effective delivery mode
+        effective_via = self.prompt_via
+        if effective_via == "arg_with_stdin_fallback":
+            if prompt and len(prompt.encode()) > _STDIN_THRESHOLD:
+                effective_via = "stdin"
+            else:
+                effective_via = "arg"
+
+        # Select template: stdin_command_template takes precedence for stdin/file
+        # modes when the CLI syntax changes (e.g. "codex exec -" vs "codex exec {prompt}").
+        use_stdin_template = (
+            effective_via in ("stdin", "file")
+            and self.stdin_command_template is not None
+        )
+        template = self.stdin_command_template if use_stdin_template else self.command_template
+
         argv = _expand_template(
-            self.command_template,
-            prompt=prompt,
+            template,
+            prompt=prompt if effective_via == "arg" else None,
+            include_prompt_token=effective_via == "arg",
             files=files or [],
             cwd=cwd,
         )
@@ -140,7 +193,20 @@ class CLIAgent:
             if value is None:
                 continue
             argv.extend(_render_param(spec, value, agent=self.name, param=pname))
-        return argv
+
+        stdin_content: str | None = None
+        prompt_file_content: str | None = None
+        if effective_via == "stdin":
+            stdin_content = prompt
+        elif effective_via == "file":
+            prompt_file_content = prompt
+
+        return RenderResult(
+            argv=argv,
+            stdin_content=stdin_content,
+            prompt_file_content=prompt_file_content,
+            prompt_via=effective_via,
+        )
 
 
 # ---------------------------------------------------------------------------
@@ -152,6 +218,7 @@ def _expand_template(
     template: str,
     *,
     prompt: str | None,
+    include_prompt_token: bool,
     files: list[str],
     cwd: str | None,
 ) -> list[str]:
@@ -159,12 +226,21 @@ def _expand_template(
     out: list[str] = []
     for tok in tokens:
         if tok == "{prompt}":
+            if not include_prompt_token:
+                # CLI uses stdin or file mode — {prompt} should not be in template.
+                raise AgentRenderError(
+                    f"Template contains {{prompt}} but prompt_via is not 'arg'. "
+                    f"Remove {{prompt}} from the command_template: {template!r}."
+                )
             if prompt is None:
                 raise AgentRenderError(
                     f"Template references {{prompt}} but no prompt was provided "
                     f"(template: {template!r})."
                 )
             out.append(prompt)
+        elif tok == "{prompt_file}":
+            # Kept as literal placeholder; the runner substitutes the real path.
+            out.append("{prompt_file}")
         elif tok == "{files}":
             out.extend(files)
         elif tok == "{cwd}":

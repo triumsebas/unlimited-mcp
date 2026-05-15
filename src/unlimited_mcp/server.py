@@ -18,6 +18,7 @@ Usage::
 
 from __future__ import annotations
 
+import asyncio
 import os
 import sys
 from pathlib import Path
@@ -39,6 +40,8 @@ from unlimited_mcp.paths import (
 )
 from unlimited_mcp.workspace.manager import WorkspaceManager
 from unlimited_mcp.providers.base import Provider
+from unlimited_mcp.providers.openai_compat import OpenAICompatProvider
+from unlimited_mcp.config.schema import ProviderConfig
 from unlimited_mcp.safety.argv_check import SafetyChecker
 from unlimited_mcp.tools.config_tools import (
     add_agent as _add_agent,
@@ -55,7 +58,11 @@ from unlimited_mcp.tools.config_tools import (
 from unlimited_mcp.tools.execution import delegate_to_agent as _delegate_to_agent
 from unlimited_mcp.tools.execution import run_and_summarize as _run_and_summarize
 from unlimited_mcp.tools.execution import run_command as _run_command
+from unlimited_mcp.tools.execution import run_shell as _run_shell
+from unlimited_mcp.observability.log_query import query_logs as _query_logs
 from unlimited_mcp.tools.jobs import cancel_job as _cancel_job
+from unlimited_mcp.tools.jobs import cleanup_branches as _cleanup_branches
+from unlimited_mcp.tools.jobs import cleanup_jobs as _cleanup_jobs
 from unlimited_mcp.tools.jobs import get_job_result as _get_job_result
 from unlimited_mcp.tools.jobs import get_job_status as _get_job_status
 from unlimited_mcp.tools.jobs import list_jobs as _list_jobs
@@ -64,8 +71,49 @@ from unlimited_mcp.tools.knowledge_tools import (
     lookup_agent_cli as _lookup_agent_cli,
     register_agent_knowledge as _register_agent_knowledge,
 )
+from unlimited_mcp.tools.workers_tools import (
+    answer_worker_questions as _answer_worker_questions,
+    get_worker_questions as _get_worker_questions,
+    resume_agent_task as _resume_agent_task,
+)
 
-_REPO_KNOWLEDGE_PATH = Path(__file__).parent.parent.parent / "knowledge.yaml"
+_REPO_KNOWLEDGE_PATH = Path(__file__).parent / "knowledge.yaml"
+
+
+_OPENAI_COMPAT_DEFAULT_URLS: dict[str, str] = {
+    "ollama":     "http://localhost:11434/v1",
+    "mlx_lm":     "http://localhost:8080/v1",
+    "gemini":     "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "groq":       "https://api.groq.com/openai/v1",
+    "openrouter": "https://openrouter.ai/api/v1",
+}
+
+_OPENAI_COMPAT_TYPES = frozenset(
+    ["openai_compat", "ollama", "mlx_lm", "gemini", "groq", "openrouter"]
+)
+
+
+def _build_provider(name: str, cfg: ProviderConfig) -> Provider | None:
+    """Instantiate a Provider from a ProviderConfig entry."""
+    if cfg.type in _OPENAI_COMPAT_TYPES:
+        api_key = (
+            cfg.api_key
+            or (os.environ.get(cfg.api_key_env, "") if cfg.api_key_env else "")
+        )
+        base_url = (
+            os.environ.get(cfg.api_base_env, cfg.base_url or "")
+            if cfg.api_base_env
+            else (cfg.base_url or _OPENAI_COMPAT_DEFAULT_URLS.get(cfg.type, ""))
+        )
+        if not base_url:
+            return None
+        return OpenAICompatProvider(
+            base_url=base_url,
+            api_key=api_key,
+            default_model=cfg.model,
+            name=name,
+        )
+    return None
 
 
 def make_server(
@@ -107,6 +155,46 @@ def make_server(
     )
     job_store = JobStore(jobs_path or jobs_dir())
     runner = LocalRunner(job_store)
+
+    # Build TsRunner instances from the queues section of config.
+    # Defaults are injected for the two built-in queues (ts / ts_serial) so the
+    # server works out of the box even without an explicit queues: block.
+    _cfg_snapshot = cfg_store.get()
+    _queue_defaults = {
+        "ts":        {"type": "local_ts", "slots": 4, "socket": None},
+        "ts_serial": {"type": "local_ts", "slots": 1, "socket": None},
+    }
+    _queue_cfgs: dict[str, object] = {}
+    for _qname, _qdef in _queue_defaults.items():
+        _qcfg = _cfg_snapshot.queues.get(_qname)
+        _queue_cfgs[_qname] = {
+            "type":   _qcfg.type   if _qcfg else _qdef["type"],
+            "slots":  _qcfg.slots  if _qcfg else _qdef["slots"],
+            "socket": _qcfg.socket if _qcfg else _qdef["socket"],
+        }
+    # Also pick up any extra named queues defined in config.
+    for _qname, _qcfg in _cfg_snapshot.queues.items():
+        if _qname not in _queue_cfgs:
+            _queue_cfgs[_qname] = {"type": _qcfg.type, "slots": _qcfg.slots, "socket": _qcfg.socket}
+
+    _ts_runners: dict[str, object] = {}
+    try:
+        from unlimited_mcp.jobs.runner_ts import TsRunner
+        for _qname, _qopt in _queue_cfgs.items():
+            if _qopt["type"] != "local_ts":  # type: ignore[index]
+                import logging as _lg
+                _lg.getLogger(__name__).warning(
+                    "Queue %r has unsupported type %r — skipping.", _qname, _qopt["type"]  # type: ignore[index]
+                )
+                continue
+            _sock = Path(_qopt["socket"]) if _qopt["socket"] else state_dir() / f"{_qname}.sock"  # type: ignore[index]
+            _ts_runners[_qname] = TsRunner(job_store, ts_socket=_sock, max_slots=int(_qopt["slots"]))  # type: ignore[index]
+    except Exception as _exc:
+        import logging as _lg
+        _lg.getLogger(__name__).warning("TsRunner unavailable: %s", _exc)
+
+    ts_runner = _ts_runners.get("ts")
+    ts_serial_runner = _ts_runners.get("ts_serial")
     # Pass stores (not snapshots) so config changes made via MCP tools
     # (add_agent, add_allowed_root, …) are visible on the next tool call.
     safety = SafetyChecker(cfg_store, kn_store)
@@ -155,28 +243,102 @@ def make_server(
         )
 
     @app.tool()
+    def run_shell(
+        script: str,
+        interpreter: str = "bash",
+        i_understand_this_runs_a_shell_script: bool = False,
+        cwd: str | None = None,
+        env_extra: dict[str, str] | None = None,
+        timeout_seconds: int = 60,
+    ) -> JobResult:
+        """Run an arbitrary shell script via bash or sh.
+
+        Unlike run_command, the script is passed verbatim to the interpreter,
+        so pipes, redirections, loops, variable expansions, and multi-step
+        logic all work.
+
+        Use run_command when you have a single known command (argv list).
+        Use run_shell when you need shell features: pipes (cmd | grep),
+        redirections (> file), loops (for f in *.log), or chained steps
+        (make && ./run-tests.sh || notify-failure).
+
+        The job is always safety_class='mutating' — static classification
+        is not possible for shell scripts. The cwd must still be inside
+        allowed_roots.
+
+        i_understand_this_runs_a_shell_script must be set to True; this
+        prevents accidental shell execution.
+        """
+        return _run_shell(
+            script,
+            safety=safety,
+            runner=runner,
+            interpreter=interpreter,
+            i_understand_this_runs_a_shell_script=i_understand_this_runs_a_shell_script,
+            cwd=cwd,
+            env_extra=env_extra,
+            timeout_seconds=timeout_seconds,
+        )
+
+    @app.tool()
     def run_and_summarize(
         argv: list[str],
         cwd: str | None = None,
         timeout_seconds: int = 600,
         confirm_token: str | None = None,
+        provider_name: str | None = None,
     ) -> JobResult:
         """Run a command, wait for completion, then summarise stdout via the provider.
 
         Blocks (polls internally) until the job finishes. Useful for short
         commands where you want the output digested into summary rather than
         reading raw output. If no provider is configured, returns the raw result.
+
+        provider_name: name of a configured provider to use for summarisation.
+            When omitted, the first configured provider is used automatically.
         """
+        resolved_provider: Provider | None = provider
+        if resolved_provider is None:
+            cfg_snapshot = cfg_store.get()
+            if provider_name:
+                pcfg = cfg_snapshot.providers.get(provider_name)
+                if pcfg:
+                    resolved_provider = _build_provider(provider_name, pcfg)
+            elif cfg_snapshot.providers:
+                first_name, first_cfg = next(iter(cfg_snapshot.providers.items()))
+                resolved_provider = _build_provider(first_name, first_cfg)
         return _run_and_summarize(
             argv,
             safety=safety,
             runner=runner,
-            provider=provider,
+            provider=resolved_provider,
             model=provider_model,
             cwd=cwd,
             timeout_seconds=timeout_seconds,
             confirm_token=confirm_token,
         )
+
+    def _pick_runner(queue: str) -> LocalRunner:
+        """Return the runner for the requested queue.
+
+        'local'          → in-process LocalRunner (default).
+        'ts'             → TsRunner parallel queue (slots configurable via config.yaml).
+        'ts_serial'      → TsRunner serial queue (1 slot).
+        '<custom_name>'  → any queue defined in the queues: section of config.yaml.
+
+        Falls back to LocalRunner with a warning if the requested queue is
+        unavailable (ts not installed, unsupported type, etc.).
+        """
+        if queue != "local":
+            ts_r = _ts_runners.get(queue)
+            if ts_r is not None:
+                return ts_r  # type: ignore[return-value]
+            import logging as _log
+            _log.getLogger(__name__).warning(
+                "Queue %r unavailable — falling back to local runner. "
+                "Check task-spooler is installed: brew install task-spooler", queue,
+            )
+        return runner
 
     @app.tool()
     def delegate_to_agent(
@@ -190,6 +352,9 @@ def make_server(
         idempotency_key: str | None = None,
         confirm_token: str | None = None,
         workspace: str | None = None,
+        tag: str | None = None,
+        queue: str = "local",
+        clarify_rounds: int = 0,
     ) -> JobResult:
         """Delegate a coding task to a configured agent (aider, opencode, smolagents, ...).
 
@@ -202,9 +367,25 @@ def make_server(
           - 'none' or '' → no workspace management (scripts, analysis, non-repo tasks)
           - 'read_only' → current dir, report only (audits)
 
+        queue: which runner to use:
+          - 'local' (default) → in-process runner, lighter, no extra deps.
+          - 'ts'              → task-spooler, survives MCP restarts. Use for
+                                tasks expected to take minutes or that must not
+                                be interrupted by a server restart.
+
+        tag: opaque label stored on the JobResult. Use list_jobs(tag=...) to
+        recover all jobs from a given session after context loss.
+
+        clarify_rounds: number of Q&A rounds the agent may run before starting
+          work (0 = none, default). The agent writes all questions for a round
+          at once; you answer via answer_worker_questions(). Limits from
+          config.clarify (max_rounds, max_total_seconds) apply. Only set this
+          for design/planning tasks or long tasks where wrong assumptions are
+          costly. Use 0 for commands, admin tasks, or short tasks.
+
         Example: delegate_to_agent(agent_name='aider_local',
                    prompt='add docstrings to all public functions',
-                   cwd='/path/to/repo')
+                   cwd='/path/to/repo', queue='ts')
         """
         return _delegate_to_agent(
             agent_name,
@@ -218,6 +399,9 @@ def make_server(
             idempotency_key=idempotency_key,
             confirm_token=confirm_token,
             workspace_override=workspace,
+            tag=tag,
+            runner_override=_pick_runner(queue),
+            clarify_rounds=clarify_rounds,
         )
 
     @app.tool()
@@ -226,6 +410,8 @@ def make_server(
         agent_name: str | None = None,
         prompt: str | None = None,
         label: str = "",
+        tag: str | None = None,
+        queue: str = "local",
         timeout_seconds: int = 600,
         idempotency_key: str | None = None,
         cwd: str | None = None,
@@ -237,6 +423,13 @@ def make_server(
         Returns immediately with status='running'. Use get_job_result(job_id)
         to poll. Prefer this over run_command for any job expected to take >30s.
 
+        queue: 'local' (default, lighter) or 'ts' (durable across MCP restarts).
+          Use 'ts' when the job is expected to run for minutes and must survive
+          a potential MCP server restart.
+
+        tag: opaque label stored on the JobResult. Use list_jobs(tag=...) to
+        recover all jobs from a given session after context loss.
+
         idempotency_key: if set and a non-failed job with this key exists,
         returns the existing job instead of submitting again.
         """
@@ -245,11 +438,12 @@ def make_server(
             agent_name=agent_name,
             prompt=prompt,
             label=label,
+            tag=tag,
             timeout_seconds=timeout_seconds,
             idempotency_key=idempotency_key,
             cwd=cwd,
             env_extra=env_extra,
-            runner=runner,
+            runner=_pick_runner(queue),
             safety=safety,
             agent_runner=agent_runner,
         )
@@ -275,17 +469,30 @@ def make_server(
         means success, 'failed' means error (see result.error and result.summary),
         'pending_confirmation' means dangerous command awaiting token.
         raw_output_ref points to the stdout log on disk (not inlined by default).
+
+        Inbox side-effect: stamps seen_at on terminal jobs the first time they
+        are read, removing them from the default list_jobs() inbox view.
         """
         return _get_job_result(job_id, runner=runner)
 
     @app.tool()
-    def list_jobs() -> list[JobResult]:
-        """Return all known job results, ordered by submission time.
+    def list_jobs(
+        tag: str | None = None,
+        status: list[str] | None = None,
+        include_seen: bool = False,
+    ) -> list[JobResult]:
+        """Return jobs matching the filters — defaults to the inbox view.
 
-        Useful to audit what workers ran and their final status. Failed jobs
-        include a summary of the last stderr line.
+        Inbox view (default): active jobs (running/queued/pending_confirmation)
+        plus terminal jobs not yet read via get_job_result (seen_at=null).
+        This is the answer to "what needs my attention right now?" after a
+        context loss or server restart.
+
+        tag: filter by the orchestrator-supplied tag set on submit.
+        status: explicit list of statuses to include (overrides inbox filter).
+        include_seen: set True to include already-acknowledged terminal jobs.
         """
-        return _list_jobs(runner=runner)
+        return _list_jobs(runner=runner, tag=tag, status=status, include_seen=include_seen)
 
     @app.tool()
     def cancel_job(job_id: str) -> JobResult:
@@ -295,6 +502,144 @@ def make_server(
         existing result is returned unchanged.
         """
         return _cancel_job(job_id, runner=runner)
+
+    @app.tool()
+    def cleanup_jobs(
+        older_than: str = "7d",
+        keep_unseen: bool = True,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Evict old job directories from disk.
+
+        older_than: age threshold, e.g. '7d', '30d', '1d'.
+        keep_unseen: when True (default), spares terminal jobs not yet read
+          via get_job_result — they are still in the inbox.
+        dry_run: when True (default), reports what would be removed without
+          deleting. Set to False to execute.
+        """
+        return _cleanup_jobs(runner=runner, older_than=older_than,
+                             keep_unseen=keep_unseen, dry_run=dry_run)
+
+    @app.tool()
+    def cleanup_branches(
+        cwd: str,
+        prefix: str = "unlimited-mcp/",
+        merged_into: str | None = "main",
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Remove leftover unlimited-mcp/* branches from a git repository.
+
+        These accumulate from safe_dev workspace jobs (result: leave_branch).
+
+        cwd: path to the git repository to clean up.
+        merged_into: only remove branches already merged into this ref (safe
+          default). Pass null to remove all matching branches unconditionally.
+        dry_run: when True (default), lists without deleting.
+        """
+        return _cleanup_branches(
+            cwd, prefix=prefix, merged_into=merged_into, dry_run=dry_run,
+            work_dir=state_dir() / "work",
+        )
+
+    @app.tool()
+    def cleanup_state(
+        logs: bool = True,
+        tmp: bool = True,
+        worktrees: bool = True,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Clean up accumulated state: old log lines, /tmp files, and orphaned worktree dirs.
+
+        Covers the three categories not handled by cleanup_jobs / cleanup_branches:
+
+        logs:      Trim lines older than 30 days from errors.jsonl and exec.jsonl.
+        tmp:       Remove items older than 7 days from /tmp/unlimited-mcp.
+        worktrees: Remove directories in state/work/ whose source git repo no longer
+                   exists on disk. Only these are safe to auto-delete — worktrees
+                   whose repo still exists are left untouched regardless of age.
+
+        dry_run (default True): report what would be removed without deleting anything.
+
+        cleanup_jobs and cleanup_branches remain separate tools because they carry
+        their own semantics (keep_unseen, merged_into, etc.).
+        """
+        from unlimited_mcp.observability.startup_cleanup import (
+            cleanup_orphaned_worktrees,
+            cleanup_tmp,
+            trim_jsonl,
+        )
+        from unlimited_mcp.paths import audit_dir
+
+        report: dict[str, Any] = {"dry_run": dry_run}
+
+        if logs:
+            log_report: dict[str, Any] = {}
+            for name in ("errors.jsonl", "exec.jsonl"):
+                path = audit_dir() / name
+                if dry_run:
+                    # Count lines that would be removed without touching the file
+                    import json as _json
+                    from datetime import UTC, datetime, timedelta
+                    cutoff = datetime.now(UTC) - timedelta(days=30)
+                    count = 0
+                    if path.exists():
+                        for raw in path.read_text(encoding="utf-8", errors="replace").splitlines():
+                            raw = raw.strip()
+                            if not raw:
+                                continue
+                            try:
+                                entry = _json.loads(raw)
+                                ts_raw = entry.get("timestamp") or entry.get("ts") or ""
+                                if ts_raw:
+                                    ts = datetime.fromisoformat(ts_raw.replace("Z", "+00:00"))
+                                    if ts < cutoff:
+                                        count += 1
+                            except (ValueError, _json.JSONDecodeError):
+                                pass
+                    log_report[name] = {"would_remove_lines": count}
+                else:
+                    removed = trim_jsonl(path, max_age_days=30)
+                    log_report[name] = {"removed_lines": removed}
+            report["logs"] = log_report
+
+        if tmp:
+            tmp_dir = Path("/tmp/unlimited-mcp")
+            if dry_run:
+                import time as _time
+                cutoff_ts = _time.time() - 7 * 86400
+                would_remove = [
+                    str(c) for c in tmp_dir.iterdir()
+                    if tmp_dir.exists() and c.stat().st_mtime < cutoff_ts
+                ] if tmp_dir.exists() else []
+                report["tmp"] = {"would_remove": would_remove, "count": len(would_remove)}
+            else:
+                removed = cleanup_tmp(tmp_dir, max_age_days=7)
+                report["tmp"] = {"removed": removed, "count": len(removed)}
+
+        if worktrees:
+            work_dir = state_dir() / "work"
+            if dry_run:
+                would_remove = []
+                if work_dir.exists():
+                    for entry in work_dir.iterdir():
+                        if not entry.is_dir():
+                            continue
+                        git_file = entry / ".git"
+                        if not git_file.is_file():
+                            continue
+                        content = git_file.read_text(encoding="utf-8", errors="replace").strip()
+                        if not content.startswith("gitdir:"):
+                            continue
+                        from pathlib import PurePosixPath as _PP
+                        gitdir = Path(content[len("gitdir:"):].strip())
+                        if not gitdir.parent.parent.exists():
+                            would_remove.append(str(entry))
+                report["worktrees"] = {"would_remove": would_remove, "count": len(would_remove)}
+            else:
+                removed_wt = cleanup_orphaned_worktrees(work_dir)
+                report["worktrees"] = {"removed": removed_wt, "count": len(removed_wt)}
+
+        return report
 
     # ------------------------------------------------------------------
     # Config management tools
@@ -308,6 +653,42 @@ def make_server(
         and which filesystem paths are currently allowed.
         """
         return _list_capabilities(config=cfg_store.get(), knowledge=kn_store.get())
+
+    @app.tool()
+    def query_logs(
+        since: str | None = None,
+        level: str | None = None,
+        tool: str | None = None,
+        job_id: str | None = None,
+        source: str = "server",
+        limit: int = 50,
+    ) -> dict[str, Any]:
+        """Query the MCP operational and error logs without needing to know their paths.
+
+        Use this to diagnose failures, trace what happened during a job, or
+        check for recent errors — all from within the MCP session.
+
+        since:  Relative duration ("1h", "30m", "2d") or ISO-8601 datetime.
+                When omitted, returns the newest `limit` entries regardless of age.
+        level:  Filter by log level: "info", "warning", "error".
+        tool:   Filter by MCP tool name, e.g. "run_command" or "delegate_to_agent".
+        job_id: Filter by job identifier to see everything logged for one job.
+        source: "server" (default) — operational log; "errors" — errors.jsonl; "all" — both.
+        limit:  Maximum entries returned (newest wins). Default 50.
+
+        Returns {ok, total_matched, returned, truncated, sources_read, entries}.
+        """
+        from unlimited_mcp.paths import audit_dir, logs_dir
+        return _query_logs(
+            logs_dir(),
+            audit_dir(),
+            since=since,
+            level=level,
+            tool=tool,
+            job_id=job_id,
+            source=source,
+            limit=limit,
+        )
 
     @app.tool()
     def add_provider(
@@ -452,11 +833,86 @@ def make_server(
         )
 
     # ------------------------------------------------------------------
+    # Worker clarification tools
+    # ------------------------------------------------------------------
+
+    @app.tool()
+    def get_worker_questions(job_id: str) -> dict[str, Any]:
+        """Return all clarification rounds for a job and their answered status.
+
+        Call this when a job was started with clarify_rounds > 0 and you want
+        to see what questions the agent wrote before starting work.  Returns
+        pending_round (the round number waiting for answers) or None if all
+        rounds are answered.  Also indicates timed_out=true if the agent
+        exhausted its wait budget.
+
+        Example flow:
+          result = get_worker_questions(job_id)
+          if result['pending_round']:
+              answer_worker_questions(job_id, result['pending_round'], [...])
+        """
+        return _get_worker_questions(job_id, runner=runner)
+
+    @app.tool()
+    def answer_worker_questions(
+        job_id: str,
+        round_number: int,
+        answers: list[dict[str, Any]],
+    ) -> dict[str, Any]:
+        """Write answers for a clarification round, unblocking the waiting agent.
+
+        Each answer must have 'id' (matching the question id) and 'answer'.
+        An optional 'reasoning' field is preserved in the Q&A history.
+
+        To stop the Q&A phase early, pass {"id": N, "answer": "STOP"} — the
+        agent will proceed immediately with what it already knows.
+
+        Example:
+          answer_worker_questions(
+              job_id="delegate_to_agent-...",
+              round_number=1,
+              answers=[
+                  {"id": 1, "answer": "B: Redis sessions", "reasoning": "Force-logout required"},
+                  {"id": 2, "answer": "A: argon2id"},
+              ],
+          )
+        """
+        return _answer_worker_questions(job_id, round_number, answers, runner=runner)
+
+    @app.tool()
+    def resume_agent_task(
+        failed_job_id: str,
+        extra_context: str | None = None,
+        agent_name_override: str | None = None,
+        clarify_rounds: int = 0,
+    ) -> JobResult:
+        """Relaunch a failed clarify-phase job with the Q&A history injected.
+
+        Use when a job exits with code 2 (agent timed out waiting for answers).
+        Reads the full Q&A history from the failed job's questions/ directory,
+        builds an enriched prompt with all decisions made so far, and submits
+        a new job to the same agent (or agent_name_override).
+
+        extra_context: optional text appended after the history — use this to
+          provide the answer to the question that caused the timeout.
+        clarify_rounds: allow additional clarification rounds in the resumed
+          job (default 0 — the history is already embedded in the prompt).
+        """
+        return _resume_agent_task(
+            failed_job_id,
+            runner=runner,
+            agent_runner=agent_runner,
+            extra_context=extra_context,
+            agent_name_override=agent_name_override,
+            clarify_rounds=clarify_rounds,
+        )
+
+    # ------------------------------------------------------------------
     # Meta tools
     # ------------------------------------------------------------------
 
     @app.tool()
-    def restart_server() -> dict[str, Any]:
+    async def restart_server() -> dict[str, Any]:
         """Restart the MCP server process (re-exec with the same argv).
 
         Use after install_and_restart or after changing config.yaml manually.
@@ -470,11 +926,15 @@ def make_server(
                 "ok": False,
                 "message": f"Cannot restart: {len(ids)} job(s) still running: {ids}",
             }
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-        return {"ok": True, "message": "Restarting..."}  # unreachable
+
+        def _do_execv() -> None:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        asyncio.get_event_loop().call_later(0.5, _do_execv)
+        return {"ok": True, "message": "Restarting in 0.5 s — connection will drop briefly."}
 
     @app.tool()
-    def install_and_restart(package: str) -> dict[str, Any]:
+    async def install_and_restart(package: str) -> dict[str, Any]:
         """Install a Python package with uv/pip then restart the server.
 
         package: pip-style specifier, e.g. 'aider-install' or 'unlimited-mcp>=0.2'.
@@ -499,7 +959,57 @@ def make_server(
                 "ok": False,
                 "message": f"pip install failed: {result.stderr.strip()[:500]}",
             }
-        os.execv(sys.executable, [sys.executable] + sys.argv)
-        return {"ok": True, "message": "Installed, restarting..."}  # unreachable
+
+        def _do_execv() -> None:
+            os.execv(sys.executable, [sys.executable] + sys.argv)
+
+        asyncio.get_event_loop().call_later(0.5, _do_execv)
+        return {"ok": True, "message": "Installed — restarting in 0.5 s."}
+
+    # ------------------------------------------------------------------
+    # Startup cleanup — runs once when the server initialises, all non-fatal
+    # ------------------------------------------------------------------
+    import logging as _logging
+    from unlimited_mcp.observability.startup_cleanup import (
+        cleanup_orphaned_worktrees,
+        cleanup_tmp,
+        trim_jsonl,
+    )
+    from unlimited_mcp.paths import audit_dir, logs_dir
+
+    _startup_log = _logging.getLogger(__name__)
+
+    # 1. Old job directories (>7 days, seen by orchestrator)
+    try:
+        evicted = job_store.cleanup_older_than(7, keep_unseen=True)
+        if evicted:
+            _startup_log.info("Startup cleanup: removed %d old job(s)", len(evicted))
+    except Exception as _exc:
+        _startup_log.warning("Startup cleanup jobs failed (non-fatal): %s", _exc)
+
+    # 2. Worktree dirs whose source repo no longer exists
+    try:
+        orphans = cleanup_orphaned_worktrees(state_dir() / "work")
+        if orphans:
+            _startup_log.info("Startup cleanup: removed %d orphaned worktree(s): %s", len(orphans), orphans)
+    except Exception as _exc:
+        _startup_log.warning("Startup cleanup worktrees failed (non-fatal): %s", _exc)
+
+    # 3. Trim old lines from JSONL audit logs (keep 30 days)
+    for _log_path in (audit_dir() / "errors.jsonl", audit_dir() / "exec.jsonl"):
+        try:
+            _removed = trim_jsonl(_log_path, max_age_days=30)
+            if _removed:
+                _startup_log.info("Startup cleanup: trimmed %d old line(s) from %s", _removed, _log_path.name)
+        except Exception as _exc:
+            _startup_log.warning("Startup cleanup trim %s failed (non-fatal): %s", _log_path.name, _exc)
+
+    # 4. /tmp/unlimited-mcp — files/dirs older than 7 days
+    try:
+        _tmp_removed = cleanup_tmp(Path("/tmp/unlimited-mcp"), max_age_days=7)
+        if _tmp_removed:
+            _startup_log.info("Startup cleanup: removed %d item(s) from /tmp/unlimited-mcp", len(_tmp_removed))
+    except Exception as _exc:
+        _startup_log.warning("Startup cleanup /tmp failed (non-fatal): %s", _exc)
 
     return app

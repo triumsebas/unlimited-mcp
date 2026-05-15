@@ -77,9 +77,11 @@ def test_phase_1_definition_of_done(tmp_path: Path) -> None:
 
     # ---- 1. Full Phase 1 tool set is registered -------------------------
     _PHASE_1_TOOLS = {
-        "run_command", "run_and_summarize", "delegate_to_agent", "submit_task",
+        "run_command", "run_shell", "run_and_summarize", "delegate_to_agent", "submit_task",
         "get_job_status", "get_job_result", "list_jobs", "cancel_job",
-        "list_capabilities", "add_provider", "add_agent", "configure_agent",
+        "cleanup_jobs", "cleanup_branches", "cleanup_state",
+        "get_worker_questions", "answer_worker_questions", "resume_agent_task",
+        "list_capabilities", "query_logs", "add_provider", "add_agent", "configure_agent",
         "remove_entry", "list_safety_policy",
         "add_allowed_root", "remove_allowed_root", "add_deny_path", "remove_deny_path",
         "lookup_agent_cli", "register_agent_knowledge",

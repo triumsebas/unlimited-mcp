@@ -54,6 +54,7 @@ def _result_dict(call_result: tuple[Any, Any]) -> dict[str, Any]:
 _PHASE_1_TOOLS = {
     # execution
     "run_command",
+    "run_shell",
     "run_and_summarize",
     "delegate_to_agent",
     "submit_task",
@@ -62,8 +63,16 @@ _PHASE_1_TOOLS = {
     "get_job_result",
     "list_jobs",
     "cancel_job",
-    # config
+    "cleanup_jobs",
+    "cleanup_branches",
+    "cleanup_state",
+    # worker clarification
+    "get_worker_questions",
+    "answer_worker_questions",
+    "resume_agent_task",
+    # config / observability
     "list_capabilities",
+    "query_logs",
     "add_provider",
     "add_agent",
     "configure_agent",

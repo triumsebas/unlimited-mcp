@@ -52,6 +52,34 @@ def main(argv: list[str] | None = None) -> int:
 
 
 # ---------------------------------------------------------------------------
+# dotenv loader
+# ---------------------------------------------------------------------------
+
+
+def _load_dotenv() -> None:
+    """Load .env files into os.environ (does not overwrite existing vars).
+
+    Checks in order:
+      1. ~/.config/unlimited-mcp/.env  (user config dir, production)
+      2. The repo root .env next to the installed package (dev convenience)
+    """
+    try:
+        from dotenv import load_dotenv
+    except ImportError:
+        return
+
+    from unlimited_mcp.paths import config_dir
+
+    candidates = [
+        config_dir() / ".env",
+        Path(__file__).parent.parent.parent / ".env",
+    ]
+    for path in candidates:
+        if path.exists():
+            load_dotenv(path, override=False)
+
+
+# ---------------------------------------------------------------------------
 # serve
 # ---------------------------------------------------------------------------
 
@@ -71,6 +99,7 @@ def _cmd_serve(args: list[str]) -> int:
         return 0
 
     ensure_dirs()
+    _load_dotenv()
     app = make_server()
     app.run()
     return 0
