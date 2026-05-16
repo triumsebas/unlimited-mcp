@@ -257,6 +257,16 @@ def make_server(
             _remote_runners[exec_host] = RemoteRunner(host, job_store)
         return _remote_runners[exec_host]
 
+    def _default_cwd(exec_host: str, cwd: str | None) -> str | None:
+        """Return cwd, falling back to the host's repos_root when cwd is None."""
+        if cwd is not None or exec_host == "local" or host_registry is None:
+            return cwd
+        try:
+            host_cfg = host_registry.get(exec_host)._config  # type: ignore[union-attr]
+            return getattr(host_cfg, "repos_root", None) or cwd
+        except Exception:
+            return cwd
+
     app = FastMCP(server_name)
 
     # ------------------------------------------------------------------
@@ -290,7 +300,7 @@ def make_server(
             argv,
             safety=safety,
             runner=_pick_host_runner(exec_host),
-            cwd=cwd,
+            cwd=_default_cwd(exec_host, cwd),
             env_extra=env_extra,
             timeout_seconds=timeout_seconds,
             confirm_token=confirm_token,
@@ -458,13 +468,21 @@ def make_server(
             else _pick_runner(queue)
         )
 
+        # Resolve effective exec_host for repos_root fallback: prefer explicit
+        # override, then agent config, then "local".
+        if resolved_host:
+            _effective_host = resolved_host
+        else:
+            _agent_cfg = cfg_store.load().agents.get(agent_name)
+            _effective_host = (_agent_cfg.exec_host if _agent_cfg and _agent_cfg.exec_host else None) or "local"
+
         return _delegate_to_agent(
             agent_name,
             agent_runner=agent_runner,
             prompt=prompt,
             files=files,
             params_override=params_override,
-            cwd=cwd,
+            cwd=_default_cwd(_effective_host, cwd),
             env_extra=env_extra,
             timeout_seconds=timeout_seconds,
             idempotency_key=idempotency_key,
