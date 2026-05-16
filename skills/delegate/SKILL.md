@@ -197,6 +197,18 @@ Límites: 5 rondas máximo, 300 s de espera total.
 
 ---
 
+## Orchestrator hard constraints
+
+These apply to YOU (the orchestrator) at all times — no exceptions:
+
+- **Never run bash commands on remote hosts** to test, fix, or review code.
+- **Never fix code yourself** — always resubmit to the appropriate agent.
+- **Never take over a timed-out job** — resubmit with more time, don't do it yourself.
+- **Local bash is only for:** git operations on the main branch + `gh` CLI for PRs.
+- **"Review" means:** read the agent's text output (`result.summary`, `result.raw_output_ref`), not open source files yourself.
+
+---
+
 ## Timeout guide
 
 **`timeout_seconds` is execution time only** — it starts when the worker
@@ -233,6 +245,40 @@ and retry before finishing. When in doubt, use the next tier up.
 | Docstrings / quick refactor | 450 s | 1 350 s | 6 750 s |
 | New feature / test suite | 900 s | 2 700 s | 13 500 s |
 | Complex multi-file task | 3 600 s | 10 800 s | 54 000 s |
+
+**Note on local/remote GPU agents (`slow` / `unusable` tiers):** these can take
+hours on tasks that Claude would finish in minutes. That is expected and
+intentional — the user may have chosen a local model for cost (totally free),
+privacy, or experimentation. A long-running local job is not a problem; do not
+escalate just because it is slow.
+
+---
+
+## Error recovery — when a job fails or stalls
+
+**The key metric is progress, not time.** Before taking any action on a failed
+or timed-out job, read `raw_output_ref` and ask: is the agent making forward
+progress, or is it looping on the same error?
+
+### Timeout with visible progress in logs
+
+The timeout was under-dimensioned. Recalculate using the tier table above,
+resubmit with a larger value. Do not escalate.
+
+### Timeout with no progress (or same error repeating)
+
+This is the real problem. Work through this escalation ladder in order:
+
+1. **Sharpen the prompt** — add concrete context: specific files, functions,
+   error messages, acceptance criteria. Resubmit to the same agent.
+2. **Switch to a more capable model** — if the agent still cannot make
+   progress after a specific prompt, resubmit the same task to a stronger model.
+3. **Rewrite from scratch** — if even the capable model cannot fix it cleanly,
+   have it rewrite the affected code from scratch. Some implementations are so
+   poorly structured that patching is more expensive than starting over.
+
+Never skip steps: always try a sharper prompt before escalating the model,
+and always try an in-place fix before rewriting.
 
 ---
 
