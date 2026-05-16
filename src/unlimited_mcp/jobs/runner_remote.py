@@ -27,6 +27,7 @@ import json
 import logging
 import subprocess
 import threading
+import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
@@ -82,6 +83,7 @@ class RemoteRunner:
         stdin_content: str | None = None,
         prompt_file_content: str | None = None,
         job_id: str | None = None,
+        remote_questions_dir: str | None = None,
     ) -> JobResult:
         """Submit *argv* to the remote host and return immediately with ``status="running"``."""
 
@@ -154,7 +156,7 @@ class RemoteRunner:
             target=self._watch,
             args=(job_id, argv, cwd, env_extra, timeout_seconds, tool,
                   started_at, branch, worktree_path, cleanup_fn,
-                  stdin_bytes, remote_prompt_file),
+                  stdin_bytes, remote_prompt_file, remote_questions_dir),
             daemon=True,
             name=f"remote-watcher-{job_id}",
         )
@@ -232,9 +234,22 @@ class RemoteRunner:
         cleanup_fn: Callable[[], None] | None,
         stdin_bytes: bytes | None = None,
         remote_prompt_file: str | None = None,
+        remote_questions_dir: str | None = None,
     ) -> None:
         timed_out = False
         output: RunOutput | None = None
+
+        # Start clarify sync thread if Q&A is active for this job.
+        _clarify_stop = threading.Event()
+        _clarify_thread: threading.Thread | None = None
+        if remote_questions_dir is not None:
+            _clarify_thread = threading.Thread(
+                target=self._clarify_loop,
+                args=(job_id, remote_questions_dir, _clarify_stop),
+                daemon=True,
+                name=f"remote-clarify-{job_id}",
+            )
+            _clarify_thread.start()
 
         try:
             output = self._host.run(
@@ -255,6 +270,10 @@ class RemoteRunner:
             if cleanup_fn is not None:
                 _safe_call(cleanup_fn)
             return
+        finally:
+            _clarify_stop.set()
+            if _clarify_thread is not None:
+                _clarify_thread.join(timeout=5.0)
 
         # Ensure output files exist — SshHost writes them via stdout_path;
         # fallback for other Host implementations that may not.
@@ -322,6 +341,60 @@ class RemoteRunner:
 
         if cleanup_fn is not None:
             _safe_call(cleanup_fn)
+
+    def _clarify_loop(
+        self, job_id: str, remote_questions_dir: str, stop: threading.Event
+    ) -> None:
+        while not stop.wait(timeout=3.0):
+            self._sync_clarify(job_id, remote_questions_dir)
+        # One final sync after the job finishes to capture any last questions.
+        self._sync_clarify(job_id, remote_questions_dir)
+
+    def _sync_clarify(self, job_id: str, remote_questions_dir: str) -> None:
+        """Sync clarify_rounds Q&A files between remote host and local JobStore.
+
+        The agent (running on the remote machine) writes question files to
+        *remote_questions_dir*.  This method downloads new question files via
+        SFTP and uploads locally-written answer files so the agent can continue.
+        """
+        local_q_dir = self._store.questions_dir(job_id)
+        local_q_dir.mkdir(parents=True, exist_ok=True)
+
+        try:
+            out = self._host.run(
+                ["sh", "-c", f"ls {remote_questions_dir}/round_*_questions.json 2>/dev/null || true"]
+            )
+            remote_files = [p.strip() for p in out.stdout.decode().splitlines() if p.strip()]
+        except Exception as exc:
+            log.debug("RemoteRunner: clarify ls failed for %s: %s", job_id, exc)
+            return
+
+        for remote_q_path in remote_files:
+            fname = remote_q_path.rsplit("/", 1)[-1]
+            local_q_path = local_q_dir / fname
+            if local_q_path.exists():
+                continue
+            try:
+                content = self._host.sftp_get(remote_q_path)
+                local_q_path.write_bytes(content)
+                log.debug("RemoteRunner: downloaded %s for job %s", fname, job_id)
+            except Exception as exc:
+                log.warning("RemoteRunner: could not download %s: %s", fname, exc)
+
+        try:
+            local_answers = sorted(local_q_dir.glob("round_*_answers.json"))
+        except Exception:
+            return
+
+        for local_a_path in local_answers:
+            remote_a_path = f"{remote_questions_dir}/{local_a_path.name}"
+            try:
+                if self._host.sftp_exists(remote_a_path):
+                    continue
+                self._host.sftp_put(remote_a_path, local_a_path.read_bytes())
+                log.debug("RemoteRunner: uploaded %s for job %s", local_a_path.name, job_id)
+            except Exception as exc:
+                log.warning("RemoteRunner: could not upload %s: %s", local_a_path.name, exc)
 
     def _write_failed(
         self,

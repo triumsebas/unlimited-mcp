@@ -186,14 +186,6 @@ class AgentRunner:
                     hint="Set supports_clarify=true in config.yaml if the agent has been verified.",
                 ))
                 clarify_rounds = 0
-            elif is_remote and not _is_remote_ts and runner_override is None:
-                # exec_host-based RemoteRunner has no polling loop — Q&A file delivery is impossible.
-                warnings.append(JobWarning(
-                    code="CLARIFY_NOT_SUPPORTED",
-                    message="clarify_rounds is not supported for exec_host-based remote agents; Q&A phase skipped.",
-                    hint="Use a remote_ts queue to enable clarify_rounds for remote agents.",
-                ))
-                clarify_rounds = 0
             else:
                 clarify_cfg = cfg.clarify
                 effective_rounds = min(clarify_rounds, clarify_cfg.max_rounds)
@@ -201,7 +193,7 @@ class AgentRunner:
                 active_runner = runner_override if runner_override is not None else self._local_runner
                 active_runner._store.create(pre_job_id)
                 q_dir = active_runner._store.questions_dir(pre_job_id)
-                if _is_remote_ts:
+                if _is_remote_ts or is_remote:
                     _remote_q_dir = f"/tmp/umcp-{pre_job_id}/questions"
                     clarify_prompt_dir: str | Path = _remote_q_dir
                 else:
