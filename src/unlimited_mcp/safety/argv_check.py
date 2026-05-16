@@ -103,6 +103,7 @@ class SafetyChecker:
         *,
         cwd: str | None = None,
         confirm_token: str | None = None,
+        extra_allowed_roots: list[str] | None = None,
     ) -> SafetyDecision:
         """Apply the full pipeline to a ``run_command`` invocation."""
         if not argv:
@@ -143,9 +144,13 @@ class SafetyChecker:
         if cwd:
             paths = [*paths, cwd]
 
+        effective_roots = list(self.config.allowed_roots)
+        if extra_allowed_roots:
+            effective_roots = effective_roots + [r for r in extra_allowed_roots if r not in effective_roots]
+
         offender = check_paths(
             paths,
-            self.config.allowed_roots,
+            effective_roots,
             self.config.deny_paths,
         )
         if offender is not None:

@@ -66,6 +66,7 @@ _PHASE_1_TOOLS = {
     "cleanup_jobs",
     "cleanup_branches",
     "cleanup_state",
+    "cleanup_remote",
     # worker clarification
     "get_worker_questions",
     "answer_worker_questions",

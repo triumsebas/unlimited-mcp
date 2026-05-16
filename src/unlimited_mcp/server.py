@@ -267,6 +267,24 @@ def make_server(
         except Exception:
             return cwd
 
+    def _host_extra_roots(exec_host: str) -> list[str] | None:
+        """Return the per-host allowed_roots + repos_root to pass as extra_allowed_roots.
+
+        These paths live on the remote machine so they are not in the global
+        allowed_roots list, but they must be reachable for remote jobs.
+        """
+        if exec_host == "local" or host_registry is None:
+            return None
+        try:
+            host_cfg = host_registry.get(exec_host)._config  # type: ignore[union-attr]
+            extras: list[str] = list(getattr(host_cfg, "allowed_roots", None) or [])
+            repos_root = getattr(host_cfg, "repos_root", None)
+            if repos_root and repos_root not in extras:
+                extras.append(repos_root)
+            return extras or None
+        except Exception:
+            return None
+
     app = FastMCP(server_name)
 
     # ------------------------------------------------------------------
@@ -304,6 +322,7 @@ def make_server(
             env_extra=env_extra,
             timeout_seconds=timeout_seconds,
             confirm_token=confirm_token,
+            extra_allowed_roots=_host_extra_roots(exec_host),
         )
 
     @app.tool()
@@ -728,6 +747,136 @@ def make_server(
             else:
                 removed_wt = cleanup_orphaned_worktrees(work_dir)
                 report["worktrees"] = {"removed": removed_wt, "count": len(removed_wt)}
+
+        return report
+
+    @app.tool()
+    def cleanup_remote(
+        exec_host: str,
+        repos: list[str] | None = None,
+        branches: bool = True,
+        merged_into: str = "main",
+        ts_output: bool = True,
+        tmp: bool = True,
+        older_than_days: int = 7,
+        dry_run: bool = True,
+    ) -> dict[str, Any]:
+        """Clean up accumulated state on a remote SSH host.
+
+        Covers three categories that build up over time on remote workers:
+
+        branches:   unlimited-mcp/* git branches already merged into `merged_into`.
+                    Scans repos under the host's repos_root (or the explicit `repos` list).
+        ts_output:  task-spooler output files older than `older_than_days` days.
+        tmp:        /tmp/unlimited-mcp directory on the remote, if present.
+
+        exec_host:       Name of a host from config.hosts (must be type: ssh).
+        repos:           List of repo names under repos_root to scan for branches.
+                         None (default) = discover all git repos under repos_root.
+        dry_run:         True (default) — report without deleting. Set False to execute.
+        older_than_days: Age threshold for ts_output and tmp cleanup (default 7).
+        """
+        if host_registry is None:
+            return {"ok": False, "error": "No host registry configured."}
+
+        try:
+            host = host_registry.get(exec_host)
+        except KeyError as e:
+            return {"ok": False, "error": str(e)}
+
+        host_cfg = getattr(host, "_config", None)
+        host_repos_root: str | None = getattr(host_cfg, "repos_root", None)
+
+        report: dict[str, Any] = {"ok": True, "dry_run": dry_run, "exec_host": exec_host}
+
+        # ---- branches --------------------------------------------------------
+        if branches:
+            branch_report: dict[str, Any] = {}
+
+            # Discover repos to scan
+            repo_names: list[str] = []
+            if repos:
+                repo_names = repos
+            elif host_repos_root:
+                ls_out = host.run(["find", host_repos_root, "-maxdepth", "1",
+                                   "-mindepth", "1", "-type", "d"])
+                if ls_out.exit_code == 0:
+                    repo_names = [
+                        line.rstrip("/").split("/")[-1]
+                        for line in ls_out.stdout.decode().splitlines()
+                        if line.strip()
+                    ]
+
+            for repo_name in repo_names:
+                repo_path = f"{host_repos_root}/{repo_name}" if host_repos_root else repo_name
+                # List branches
+                list_out = host.run(
+                    ["git", "-C", repo_path, "branch",
+                     "--format=%(refname:short)", f"--merged={merged_into}"],
+                )
+                if list_out.exit_code != 0:
+                    branch_report[repo_name] = {"error": list_out.stderr.decode().strip()}
+                    continue
+                candidates = [
+                    b.strip() for b in list_out.stdout.decode().splitlines()
+                    if b.strip().startswith("unlimited-mcp/") and b.strip() != merged_into
+                ]
+                if dry_run:
+                    branch_report[repo_name] = {"would_delete": candidates, "count": len(candidates)}
+                else:
+                    deleted, failed = [], []
+                    for branch in candidates:
+                        del_out = host.run(["git", "-C", repo_path, "branch", "-d", branch])
+                        (deleted if del_out.exit_code == 0 else failed).append(branch)
+                    branch_report[repo_name] = {"deleted": deleted, "failed": failed,
+                                                "count": len(deleted)}
+
+            report["branches"] = branch_report
+
+        # ---- ts output files -------------------------------------------------
+        if ts_output:
+            find_cmd = [
+                "find", "/tmp", "-maxdepth", "1", "-name", "ts-out.*",
+                "-mtime", f"+{older_than_days}",
+            ]
+            find_out = host.run(find_cmd)
+            ts_files = [f.strip() for f in find_out.stdout.decode().splitlines() if f.strip()]
+            if dry_run:
+                report["ts_output"] = {"would_remove": ts_files, "count": len(ts_files)}
+            else:
+                if ts_files:
+                    rm_out = host.run(["rm", "-f", *ts_files])
+                    report["ts_output"] = {
+                        "removed": ts_files if rm_out.exit_code == 0 else [],
+                        "error": rm_out.stderr.decode().strip() if rm_out.exit_code != 0 else None,
+                        "count": len(ts_files),
+                    }
+                else:
+                    report["ts_output"] = {"removed": [], "count": 0}
+
+        # ---- remote /tmp/unlimited-mcp ---------------------------------------
+        if tmp:
+            remote_tmp = "/tmp/unlimited-mcp"
+            find_tmp_out = host.run([
+                "find", remote_tmp, "-maxdepth", "1", "-mindepth", "1",
+                "-mtime", f"+{older_than_days}",
+            ])
+            if find_tmp_out.exit_code == 0:
+                tmp_items = [f.strip() for f in find_tmp_out.stdout.decode().splitlines() if f.strip()]
+                if dry_run:
+                    report["tmp"] = {"would_remove": tmp_items, "count": len(tmp_items)}
+                else:
+                    if tmp_items:
+                        rm_tmp = host.run(["rm", "-rf", *tmp_items])
+                        report["tmp"] = {
+                            "removed": tmp_items if rm_tmp.exit_code == 0 else [],
+                            "error": rm_tmp.stderr.decode().strip() if rm_tmp.exit_code != 0 else None,
+                            "count": len(tmp_items),
+                        }
+                    else:
+                        report["tmp"] = {"removed": [], "count": 0}
+            else:
+                report["tmp"] = {"skipped": f"{remote_tmp} not found or not accessible"}
 
         return report
 

@@ -47,10 +47,14 @@ def run_command(
     env_extra: dict[str, str] | None = None,
     timeout_seconds: int = 600,
     confirm_token: str | None = None,
+    extra_allowed_roots: list[str] | None = None,
     tool: str = "run_command",
 ) -> JobResult:
     """Apply the safety pipeline to *argv* then submit to :class:`LocalRunner`."""
-    decision = safety.check_run_command(argv, cwd=cwd, confirm_token=confirm_token)
+    decision = safety.check_run_command(
+        argv, cwd=cwd, confirm_token=confirm_token,
+        extra_allowed_roots=extra_allowed_roots,
+    )
     if not decision.allowed:
         return _blocked_result(decision, tool=tool)
     return runner.submit(
