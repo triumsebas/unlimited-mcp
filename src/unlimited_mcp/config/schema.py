@@ -107,6 +107,9 @@ class SshHostConfig(_HostBase):
     user: str
     host: str
     port: int = 22
+    key_file: str | None = None
+    key_passphrase_env: str | None = None
+    key_passphrase_keyring: str | None = None
 
 
 HostConfig = Annotated[
@@ -172,12 +175,18 @@ class QueueConfig(_Strict):
     """Queue backend type.
 
     ``"local_ts"``   — task-spooler running on this machine (default).
-    ``"remote_ts"``  — reserved for future remote task-spooler support.
+    ``"remote_ts"``  — task-spooler running on a remote SSH host.
     """
     socket: str | None = None
-    """Override the TS_SOCKET path.  Defaults to ``state_dir/<name>.sock``."""
+    """Override the TS_SOCKET path.
+
+    For ``local_ts``: path on this machine, defaults to ``state_dir/<name>.sock``.
+    For ``remote_ts``: path on the remote machine passed as ``TS_SOCKET``.
+    """
     slots: int = 1
-    """Maximum number of simultaneous jobs for this queue."""
+    """Maximum number of simultaneous jobs for this queue (``ts -S <n>``)."""
+    host: str | None = None
+    """SSH host name (key in ``hosts:``) — required for ``remote_ts`` queues."""
 
 
 # ---------------------------------------------------------------------------

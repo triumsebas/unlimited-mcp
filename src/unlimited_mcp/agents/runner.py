@@ -54,6 +54,11 @@ from unlimited_mcp.jobs.store import JobStore
 from unlimited_mcp.safety.argv_check import SafetyChecker, SafetyDecision
 from unlimited_mcp.workspace.manager import WorkspaceManager
 
+from typing import TYPE_CHECKING
+if TYPE_CHECKING:
+    from unlimited_mcp.hosts.registry import HostRegistry
+    from unlimited_mcp.jobs.runner_remote import RemoteRunner
+
 log = logging.getLogger(__name__)
 
 DEFAULT_TOOL_NAME = "delegate_to_agent"
@@ -70,12 +75,14 @@ class AgentRunner:
         local_runner: LocalRunner,
         safety: SafetyChecker,
         workspace_manager: WorkspaceManager | None = None,
+        host_registry: HostRegistry | None = None,
     ) -> None:
         self._config = config
         self._knowledge = knowledge
         self._local_runner = local_runner
         self._safety = safety
         self._workspace_manager = workspace_manager
+        self._host_registry = host_registry
 
     def _get_config(self) -> Config:
         return self._config.get() if isinstance(self._config, ConfigStore) else self._config
@@ -96,6 +103,7 @@ class AgentRunner:
         idempotency_key: str | None = None,
         confirm_token: str | None = None,
         workspace_override: str | None = None,
+        exec_host_override: str | None = None,
         tag: str | None = None,
         runner_override: Any | None = None,
         tool: str = DEFAULT_TOOL_NAME,
@@ -123,13 +131,19 @@ class AgentRunner:
             merged_env.update(env_extra)
         env_extra = merged_env or None
 
+        # ---- exec_host resolution --------------------------------------------
+        exec_host = exec_host_override or (agent_cfg.exec_host if agent_cfg else "local")
+        is_remote = exec_host != "local"
+
         # ---- workspace -------------------------------------------------------
+        # Skip workspace management for remote agents: the worktree would need
+        # to exist on the remote machine.  Use workspace="none" in that case.
         workspace = None
         effective_cwd = cwd
         branch: str | None = None
         worktree_path: str | None = None
 
-        if self._workspace_manager is not None:
+        if not is_remote and self._workspace_manager is not None:
             # workspace_override="" or "none" explicitly disables worktree.
             if workspace_override is not None:
                 workspace_preset = workspace_override if workspace_override not in ("", "none") else None
@@ -153,14 +167,31 @@ class AgentRunner:
         # ---- clarify preamble ------------------------------------------------
         warnings: list[JobWarning] = []
         pre_job_id: str | None = None
+        _remote_q_dir: str | None = None
 
         if clarify_rounds > 0:
+            # Detect runner type for Q&A routing.
+            _is_remote_ts = False
+            try:
+                from unlimited_mcp.jobs.runner_remote_ts import RemoteTsRunner as _RemoteTsRunner
+                _is_remote_ts = isinstance(runner_override, _RemoteTsRunner)
+            except ImportError:
+                pass
+
             agent_cfg = cfg.agents.get(agent_name)
             if agent_cfg is not None and not agent_cfg.supports_clarify:
                 warnings.append(JobWarning(
                     code="CLARIFY_NOT_SUPPORTED",
                     message=f"Agent {agent_name!r} has supports_clarify=False; Q&A phase skipped.",
                     hint="Set supports_clarify=true in config.yaml if the agent has been verified.",
+                ))
+                clarify_rounds = 0
+            elif is_remote and not _is_remote_ts and runner_override is None:
+                # exec_host-based RemoteRunner has no polling loop — Q&A file delivery is impossible.
+                warnings.append(JobWarning(
+                    code="CLARIFY_NOT_SUPPORTED",
+                    message="clarify_rounds is not supported for exec_host-based remote agents; Q&A phase skipped.",
+                    hint="Use a remote_ts queue to enable clarify_rounds for remote agents.",
                 ))
                 clarify_rounds = 0
             else:
@@ -170,9 +201,14 @@ class AgentRunner:
                 active_runner = runner_override if runner_override is not None else self._local_runner
                 active_runner._store.create(pre_job_id)
                 q_dir = active_runner._store.questions_dir(pre_job_id)
+                if _is_remote_ts:
+                    _remote_q_dir = f"/tmp/umcp-{pre_job_id}/questions"
+                    clarify_prompt_dir: str | Path = _remote_q_dir
+                else:
+                    clarify_prompt_dir = q_dir
                 prompt = _build_clarify_prompt(
                     original_prompt=prompt or "",
-                    questions_dir=q_dir,
+                    questions_dir=clarify_prompt_dir,
                     max_rounds=effective_rounds,
                     max_total_seconds=clarify_cfg.max_total_seconds,
                 )
@@ -199,7 +235,24 @@ class AgentRunner:
 
         # ---- submit ----------------------------------------------------------
         cleanup_fn = workspace.cleanup if workspace is not None else None
-        active_runner = runner_override if runner_override is not None else self._local_runner
+
+        # runner_override (queue selection) takes precedence; then exec_host.
+        if runner_override is not None:
+            active_runner = runner_override
+        elif is_remote:
+            if self._host_registry is None:
+                raise RuntimeError(
+                    f"Agent {agent_name!r} has exec_host={exec_host!r} but no "
+                    "HostRegistry is configured in AgentRunner."
+                )
+            from unlimited_mcp.jobs.runner_remote import RemoteRunner
+            host = self._host_registry.get(exec_host)
+            active_runner = RemoteRunner(host, self._local_runner._store)
+        else:
+            active_runner = self._local_runner
+        extra_kw: dict[str, Any] = {}
+        if _remote_q_dir is not None:
+            extra_kw["remote_questions_dir"] = _remote_q_dir
         result = active_runner.submit(
             render.argv,
             label=agent_name,
@@ -215,6 +268,7 @@ class AgentRunner:
             stdin_content=render.stdin_content,
             prompt_file_content=render.prompt_file_content,
             job_id=pre_job_id,
+            **extra_kw,
         )
         if warnings:
             result = result.model_copy(update={"warnings": result.warnings + warnings})
@@ -228,7 +282,7 @@ class AgentRunner:
 
 def _build_clarify_prompt(
     original_prompt: str,
-    questions_dir: Path,
+    questions_dir: str | Path,
     max_rounds: int,
     max_total_seconds: int,
 ) -> str:

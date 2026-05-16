@@ -29,8 +29,10 @@ from mcp.server.fastmcp import FastMCP
 from unlimited_mcp.agents.runner import AgentRunner
 from unlimited_mcp.config.knowledge import KnowledgeStore
 from unlimited_mcp.config.loader import ConfigStore
+from unlimited_mcp.hosts.registry import HostRegistry
 from unlimited_mcp.jobs.result import JobResult
 from unlimited_mcp.jobs.runner_local import LocalRunner
+from unlimited_mcp.jobs.runner_remote import RemoteRunner
 from unlimited_mcp.jobs.store import JobStore
 from unlimited_mcp.paths import (
     config_path,
@@ -47,13 +49,17 @@ from unlimited_mcp.tools.config_tools import (
     add_agent as _add_agent,
     add_allowed_root as _add_allowed_root,
     add_deny_path as _add_deny_path,
+    add_host as _add_host,
     add_provider as _add_provider,
+    add_queue as _add_queue,
     configure_agent as _configure_agent,
+    configure_safety as _configure_safety,
     list_capabilities as _list_capabilities,
     list_safety_policy as _list_safety_policy,
     remove_allowed_root as _remove_allowed_root,
     remove_deny_path as _remove_deny_path,
     remove_entry as _remove_entry,
+    ssh_trust_host as _ssh_trust_host,
 )
 from unlimited_mcp.tools.execution import delegate_to_agent as _delegate_to_agent
 from unlimited_mcp.tools.execution import run_and_summarize as _run_and_summarize
@@ -155,14 +161,16 @@ def make_server(
     )
     job_store = JobStore(jobs_path or jobs_dir())
     runner = LocalRunner(job_store)
+    host_registry = HostRegistry(cfg_store)
+    _remote_runners: dict[str, RemoteRunner] = {}
 
     # Build TsRunner instances from the queues section of config.
     # Defaults are injected for the two built-in queues (ts / ts_serial) so the
     # server works out of the box even without an explicit queues: block.
     _cfg_snapshot = cfg_store.get()
     _queue_defaults = {
-        "ts":        {"type": "local_ts", "slots": 4, "socket": None},
-        "ts_serial": {"type": "local_ts", "slots": 1, "socket": None},
+        "ts":        {"type": "local_ts", "slots": 4, "socket": None, "host": None},
+        "ts_serial": {"type": "local_ts", "slots": 1, "socket": None, "host": None},
     }
     _queue_cfgs: dict[str, object] = {}
     for _qname, _qdef in _queue_defaults.items():
@@ -171,27 +179,57 @@ def make_server(
             "type":   _qcfg.type   if _qcfg else _qdef["type"],
             "slots":  _qcfg.slots  if _qcfg else _qdef["slots"],
             "socket": _qcfg.socket if _qcfg else _qdef["socket"],
+            "host":   _qcfg.host   if _qcfg else _qdef["host"],
         }
     # Also pick up any extra named queues defined in config.
     for _qname, _qcfg in _cfg_snapshot.queues.items():
         if _qname not in _queue_cfgs:
-            _queue_cfgs[_qname] = {"type": _qcfg.type, "slots": _qcfg.slots, "socket": _qcfg.socket}
+            _queue_cfgs[_qname] = {
+                "type":   _qcfg.type,
+                "slots":  _qcfg.slots,
+                "socket": _qcfg.socket,
+                "host":   _qcfg.host,
+            }
 
     _ts_runners: dict[str, object] = {}
     try:
         from unlimited_mcp.jobs.runner_ts import TsRunner
+        from unlimited_mcp.jobs.runner_remote_ts import RemoteTsRunner as _RemoteTsRunner
+        import logging as _lg
+        _ql = _lg.getLogger(__name__)
         for _qname, _qopt in _queue_cfgs.items():
-            if _qopt["type"] != "local_ts":  # type: ignore[index]
-                import logging as _lg
-                _lg.getLogger(__name__).warning(
-                    "Queue %r has unsupported type %r — skipping.", _qname, _qopt["type"]  # type: ignore[index]
+            _qtype = _qopt["type"]  # type: ignore[index]
+            if _qtype == "local_ts":
+                _sock = Path(_qopt["socket"]) if _qopt["socket"] else state_dir() / f"{_qname}.sock"  # type: ignore[index]
+                _ts_runners[_qname] = TsRunner(job_store, ts_socket=_sock, max_slots=int(_qopt["slots"]))  # type: ignore[index]
+            elif _qtype == "remote_ts":
+                _host_name = _qopt.get("host")  # type: ignore[union-attr]
+                if not _host_name:
+                    _ql.warning("Queue %r: remote_ts requires a 'host' field — skipping.", _qname)
+                    continue
+                _host_cfg = _cfg_snapshot.hosts.get(_host_name)
+                if _host_cfg is None or _host_cfg.type != "ssh":
+                    _ql.warning(
+                        "Queue %r: host %r must be type 'ssh' for remote_ts — skipping.",
+                        _qname, _host_name,
+                    )
+                    continue
+                try:
+                    _ssh_host = host_registry.get(_host_name)
+                except KeyError:
+                    _ql.warning("Queue %r: host %r not found in config — skipping.", _qname, _host_name)
+                    continue
+                _ts_runners[_qname] = _RemoteTsRunner(
+                    _ssh_host,  # type: ignore[arg-type]
+                    job_store,
+                    ts_socket=_qopt.get("socket"),  # type: ignore[union-attr]
+                    max_slots=int(_qopt["slots"]),  # type: ignore[index]
                 )
-                continue
-            _sock = Path(_qopt["socket"]) if _qopt["socket"] else state_dir() / f"{_qname}.sock"  # type: ignore[index]
-            _ts_runners[_qname] = TsRunner(job_store, ts_socket=_sock, max_slots=int(_qopt["slots"]))  # type: ignore[index]
+            else:
+                _ql.warning("Queue %r has unsupported type %r — skipping.", _qname, _qtype)
     except Exception as _exc:
         import logging as _lg
-        _lg.getLogger(__name__).warning("TsRunner unavailable: %s", _exc)
+        _lg.getLogger(__name__).warning("Runner init error: %s", _exc)
 
     ts_runner = _ts_runners.get("ts")
     ts_serial_runner = _ts_runners.get("ts_serial")
@@ -207,7 +245,17 @@ def make_server(
         local_runner=runner,
         safety=safety,
         workspace_manager=workspace_mgr,
+        host_registry=host_registry,
     )
+
+    def _pick_host_runner(exec_host: str) -> LocalRunner | RemoteRunner:
+        """Resolve exec_host name to a runner (cached per host)."""
+        if exec_host == "local":
+            return runner
+        if exec_host not in _remote_runners:
+            host = host_registry.get(exec_host)
+            _remote_runners[exec_host] = RemoteRunner(host, job_store)
+        return _remote_runners[exec_host]
 
     app = FastMCP(server_name)
 
@@ -222,6 +270,7 @@ def make_server(
         env_extra: dict[str, str] | None = None,
         timeout_seconds: int = 600,
         confirm_token: str | None = None,
+        exec_host: str = "local",
     ) -> JobResult:
         """Run a command after the safety pipeline.
 
@@ -231,11 +280,16 @@ def make_server(
         Safety blocks return status='failed' (OUT_OF_ROOT, SHELL_LIKE_BLOCKED) or
         status='pending_confirmation' with a confirm_token for dangerous commands.
         Re-call with confirm_token=<token> to proceed after user approval.
+
+        exec_host: name of a host from config.hosts, or 'local' (default).
+          When set to an SSH host, the command runs on the remote machine.
+          The host must be configured with proper SSH auth (see SSH.md).
+          Example: exec_host='gpu_server'
         """
         return _run_command(
             argv,
             safety=safety,
-            runner=runner,
+            runner=_pick_host_runner(exec_host),
             cwd=cwd,
             env_extra=env_extra,
             timeout_seconds=timeout_seconds,
@@ -318,13 +372,14 @@ def make_server(
             confirm_token=confirm_token,
         )
 
-    def _pick_runner(queue: str) -> LocalRunner:
+    def _pick_runner(queue: str) -> object:
         """Return the runner for the requested queue.
 
         'local'          → in-process LocalRunner (default).
         'ts'             → TsRunner parallel queue (slots configurable via config.yaml).
         'ts_serial'      → TsRunner serial queue (1 slot).
-        '<custom_name>'  → any queue defined in the queues: section of config.yaml.
+        '<custom_name>'  → any queue defined in the queues: section of config.yaml,
+                           including remote_ts queues backed by RemoteTsRunner.
 
         Falls back to LocalRunner with a warning if the requested queue is
         unavailable (ts not installed, unsupported type, etc.).
@@ -354,6 +409,7 @@ def make_server(
         workspace: str | None = None,
         tag: str | None = None,
         queue: str = "local",
+        exec_host: str | None = None,
         clarify_rounds: int = 0,
     ) -> JobResult:
         """Delegate a coding task to a configured agent (aider, opencode, smolagents, ...).
@@ -367,26 +423,34 @@ def make_server(
           - 'none' or '' → no workspace management (scripts, analysis, non-repo tasks)
           - 'read_only' → current dir, report only (audits)
 
-        queue: which runner to use:
+        queue: which runner to use for LOCAL execution:
           - 'local' (default) → in-process runner, lighter, no extra deps.
-          - 'ts'              → task-spooler, survives MCP restarts. Use for
-                                tasks expected to take minutes or that must not
-                                be interrupted by a server restart.
+          - 'ts'              → task-spooler, survives MCP restarts.
+          Ignored when exec_host is set to a remote host.
+
+        exec_host: run the agent process on a remote machine instead of locally.
+          Must match a key in config.hosts. When set, queue is ignored and
+          workspace management is skipped (the repo must already exist on the
+          remote). Overrides the agent's configured exec_host field.
+          Example: exec_host='gpu_server'
 
         tag: opaque label stored on the JobResult. Use list_jobs(tag=...) to
         recover all jobs from a given session after context loss.
 
         clarify_rounds: number of Q&A rounds the agent may run before starting
-          work (0 = none, default). The agent writes all questions for a round
-          at once; you answer via answer_worker_questions(). Limits from
-          config.clarify (max_rounds, max_total_seconds) apply. Only set this
-          for design/planning tasks or long tasks where wrong assumptions are
-          costly. Use 0 for commands, admin tasks, or short tasks.
+          work (0 = none, default). Only set this for design/planning tasks or
+          long tasks where wrong assumptions are costly.
 
-        Example: delegate_to_agent(agent_name='aider_local',
-                   prompt='add docstrings to all public functions',
-                   cwd='/path/to/repo', queue='ts')
+        Example (local):  delegate_to_agent('aider_local',
+                            prompt='add docstrings', cwd='/path/to/repo')
+        Example (remote): delegate_to_agent('aider_local',
+                            prompt='train model', cwd='/home/ubuntu/repo',
+                            exec_host='gpu_server')
         """
+        # exec_host wins over queue; resolve runner accordingly.
+        resolved_host = exec_host  # may be None → AgentRunner reads agent_cfg.exec_host
+        runner_override = None if resolved_host else _pick_runner(queue)
+
         return _delegate_to_agent(
             agent_name,
             agent_runner=agent_runner,
@@ -399,8 +463,9 @@ def make_server(
             idempotency_key=idempotency_key,
             confirm_token=confirm_token,
             workspace_override=workspace,
+            exec_host_override=resolved_host,
             tag=tag,
-            runner_override=_pick_runner(queue),
+            runner_override=runner_override,
             clarify_rounds=clarify_rounds,
         )
 
@@ -753,6 +818,117 @@ def make_server(
         Example: configure_agent('aider_local', set={'model': 'gpt-4o', 'git': True})
         """
         return _configure_agent(name, set=set, unset=unset, config_store=cfg_store)
+
+    @app.tool()
+    def configure_safety(
+        allow_shell_like_argv: bool | None = None,
+        default_safety_policy: str | None = None,
+        confirm_token_ttl_seconds: int | None = None,
+        log_full_shell_scripts: bool | None = None,
+        clarify_max_rounds: int | None = None,
+        clarify_max_seconds: int | None = None,
+    ) -> dict[str, Any]:
+        """Update global safety and clarify settings in config.yaml.
+
+        All parameters are optional — only the ones provided are changed.
+        Changes take effect on the next tool call (config is re-read live).
+
+        allow_shell_like_argv:     Allow argv like ['bash', '-c', '...']. Default False.
+        default_safety_policy:     'read_only' | 'standard' | 'permissive'.
+        confirm_token_ttl_seconds: Token validity window in seconds (default 300).
+        log_full_shell_scripts:    Log full script content in audit log (default False).
+        clarify_max_rounds:        Cap on clarify_rounds per task (default 5).
+        clarify_max_seconds:       Total Q&A wait budget in seconds (default 300).
+
+        Example: configure_safety(allow_shell_like_argv=True, default_safety_policy='permissive')
+        """
+        return _configure_safety(
+            allow_shell_like_argv=allow_shell_like_argv,
+            default_safety_policy=default_safety_policy,
+            confirm_token_ttl_seconds=confirm_token_ttl_seconds,
+            log_full_shell_scripts=log_full_shell_scripts,
+            clarify_max_rounds=clarify_max_rounds,
+            clarify_max_seconds=clarify_max_seconds,
+            config_store=cfg_store,
+        )
+
+    @app.tool()
+    def add_host(
+        name: str,
+        host: str,
+        user: str,
+        port: int = 22,
+        key_file: str | None = None,
+        key_passphrase_env: str | None = None,
+        key_passphrase_keyring: str | None = None,
+    ) -> dict[str, Any]:
+        """Add or replace an SSH host in config.yaml.
+
+        The host is immediately usable for run_command(exec_host=name) and
+        delegate_to_agent(exec_host=name) without a server restart.
+
+        name:    Identifier used in exec_host / queue host field (e.g. 'gpu_server').
+        host:    Hostname or IP of the remote machine.
+        user:    SSH username.
+        port:    SSH port (default 22).
+        key_file: Path to a specific private key (optional — agent/default keys are tried first).
+        key_passphrase_env: Name of an env var holding the key passphrase (never the value itself).
+        key_passphrase_keyring: Keychain service name holding the passphrase.
+
+        Call ssh_trust_host(host, port) first if the machine is not yet in known_hosts.
+        Example: add_host('gpu_server', host='192.168.1.100', user='ubuntu')
+        """
+        return _add_host(
+            name, host, user,
+            port=port,
+            key_file=key_file,
+            key_passphrase_env=key_passphrase_env,
+            key_passphrase_keyring=key_passphrase_keyring,
+            config_store=cfg_store,
+        )
+
+    @app.tool()
+    def add_queue(
+        name: str,
+        queue_type: str = "remote_ts",
+        slots: int = 1,
+        host: str | None = None,
+        socket: str | None = None,
+    ) -> dict[str, Any]:
+        """Add or replace a queue entry in config.yaml.
+
+        queue_type: 'remote_ts' — task-spooler on a remote SSH host (most common).
+                    'local_ts'  — task-spooler on this machine.
+        host:   SSH host name (key in hosts:) — required for remote_ts.
+        slots:  Maximum simultaneous jobs on the remote ts daemon (default 1).
+        socket: Optional TS_SOCKET path on the remote machine (for queue isolation).
+
+        Requires restart_server() to activate (queues are wired at startup).
+        Example: add_queue('gpu', host='gpu_server', slots=4)
+        """
+        return _add_queue(
+            name,
+            queue_type=queue_type,
+            slots=slots,
+            host=host,
+            socket=socket,
+            config_store=cfg_store,
+        )
+
+    @app.tool()
+    def ssh_trust_host(host: str, port: int = 22) -> dict[str, Any]:
+        """Add the SSH host key to ~/.ssh/known_hosts via ssh-keyscan (one-time setup).
+
+        Run this once per new SSH host before add_host / run_command(exec_host=...).
+        Without it, paramiko rejects the connection because the host fingerprint
+        is unknown.
+
+        WARNING: the fingerprint is added without manual verification.
+        Only use on networks you trust (home, VPN, private cloud).
+
+        After this call, test with: run_command(['hostname'], exec_host='<name>')
+        """
+        return _ssh_trust_host(host, port=port)
 
     @app.tool()
     def remove_entry(section: str, name: str) -> dict[str, Any]:

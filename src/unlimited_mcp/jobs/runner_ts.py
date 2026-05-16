@@ -18,6 +18,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import subprocess
 import sys
 from collections.abc import Callable
@@ -30,6 +31,19 @@ from unlimited_mcp.jobs.store import JobStore
 
 
 _TERMINAL: frozenset[JobStatus] = frozenset({"completed", "failed", "cancelled"})
+
+
+def _find_ts_bin() -> str:
+    """Return the task-spooler binary available on this system.
+
+    On Linux, the package may install as ``tsp`` to avoid conflicting with the
+    ``ts`` binary from ``moreutils``. On macOS (Homebrew) it is always ``ts``.
+    We probe ``tsp`` first so Linux systems with both packages use the right one.
+    """
+    for candidate in ("tsp", "ts"):
+        if shutil.which(candidate) is not None:
+            return candidate
+    return "ts"  # not found — probe in __init__ will raise TsNotFoundError
 
 
 class TsNotFoundError(RuntimeError):
@@ -59,7 +73,7 @@ class TsRunner:
         store: JobStore,
         *,
         ts_socket: Path | str | None = None,
-        ts_bin: str = "ts",
+        ts_bin: str = _find_ts_bin(),
         max_slots: int | None = None,
     ) -> None:
         self._store = store
