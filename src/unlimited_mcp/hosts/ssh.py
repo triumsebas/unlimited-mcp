@@ -258,6 +258,30 @@ class SshHost:
     # Host protocol
     # ------------------------------------------------------------------
 
+    def _open_channel_with_agent(
+        self,
+        client: "paramiko.SSHClient",
+        cmd: str,
+        timeout_seconds: int,
+    ) -> tuple:
+        """Open a channel with SSH agent forwarding enabled and exec *cmd*.
+
+        Forwards the local SSH agent to the remote session so that workers can
+        authenticate to GitHub (or any SSH service) using the orchestrator's
+        local keys — no credentials are stored on the remote host.
+        """
+        import paramiko.agent as _agent
+
+        transport = client.get_transport()
+        channel = transport.open_session()
+        _agent.AgentRequestHandler(channel)
+        channel.exec_command(cmd)
+        channel.settimeout(float(timeout_seconds))
+        stdout_f = channel.makefile("rb")
+        stderr_f = channel.makefile_stderr("rb")
+        stdin_f = channel.makefile_stdin("wb")
+        return stdin_f, stdout_f, stderr_f
+
     def run(
         self,
         argv: list[str],
@@ -282,7 +306,10 @@ class SshHost:
         client = self._get_client()
         t0 = time.monotonic()
 
-        _, stdout_f, stderr_f = client.exec_command(cmd, timeout=float(timeout_seconds))
+        if self._config.forward_agent:
+            _, stdout_f, stderr_f = self._open_channel_with_agent(client, cmd, timeout_seconds)
+        else:
+            _, stdout_f, stderr_f = client.exec_command(cmd, timeout=float(timeout_seconds))
         if stdin_content is not None:
             _.write(stdin_content)
         _.close()  # signals EOF to the remote command

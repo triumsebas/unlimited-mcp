@@ -352,6 +352,160 @@ Option 1, without any manual `ssh-add` per session.
 
 ---
 
+## Git credentials on the remote
+
+When a worker needs to clone, fetch, or push to GitHub, the remote machine
+must be able to authenticate.  Two strategies are supported — pick one based
+on how your team manages SSH keys.
+
+### Strategy A — SSH agent forwarding (recommended)
+
+The orchestrator forwards its local SSH agent to the remote session.  The
+worker authenticates to GitHub using the local key — **no key material is
+ever stored on the remote host**.
+
+Enable it with a single field in `config.yaml`:
+
+```yaml
+hosts:
+  gpu_server:
+    type: ssh
+    user: ubuntu
+    host: 192.168.1.100
+    forward_agent: true   # default: false
+    repos_root: /home/ubuntu/repos   # see "Repo layout" below
+```
+
+Bootstrap the repo on the remote the first time (the orchestrator runs this):
+
+```python
+run_command(["git", "clone", "git@github.com:org/repo.git", "/home/ubuntu/repo"],
+            host="gpu_server")
+```
+
+Subsequent pushes from the worker branch work transparently because the
+agent is available for the lifetime of each SSH channel that unlimited-mcp
+opens.
+
+**Prerequisites:**
+- Your local SSH key is loaded in the agent (`ssh-add -l` should list it).
+- The public key is registered in GitHub (Settings → SSH and GPG keys).
+- The remote server's `sshd_config` must have `AllowAgentForwarding yes`
+  (default on most distributions).
+
+---
+
+### Strategy B — HTTPS with a token
+
+If your team uses HTTPS for git, pass a GitHub token via `env_extra` on the
+agent.  The token is read from your local environment — never written to
+the remote disk.
+
+```yaml
+agents:
+  aider_remote:
+    cli: aider
+    host: gpu_server
+    env_extra:
+      GIT_TOKEN: "${GITHUB_TOKEN}"   # expands from the local env at call time
+```
+
+Bootstrap with the token embedded in the HTTPS URL:
+
+```python
+run_command(
+    ["git", "clone",
+     "https://${GIT_TOKEN}@github.com/org/repo.git", "/home/ubuntu/repo"],
+    host="gpu_server",
+    env_extra={"GIT_TOKEN": os.environ["GITHUB_TOKEN"]},
+)
+```
+
+Workers inherit `GIT_TOKEN` and can use it for `git push` via the standard
+[git credential helper](https://git-scm.com/docs/gitcredentials) or
+`GIT_ASKPASS`.
+
+---
+
+### Comparison
+
+| | SSH agent forwarding | HTTPS + token |
+|---|---|---|
+| Key material on remote | Never | Never (token in env only) |
+| GitHub setup | SSH key registered | Personal access token (PAT) |
+| `config.yaml` change | `forward_agent: true` | `env_extra: GIT_TOKEN` |
+| Works without agent running | No | Yes |
+| Limitation | Requires live MCP SSH connection | Token must be rotated periodically |
+
+---
+
+### Repo layout on the remote (`repos_root`)
+
+`repos_root` sets the base directory where all repos live on a given host.
+It is a host-level config field — not per-agent, not per-call.
+
+```yaml
+hosts:
+  gpu_server:
+    type: ssh
+    user: ubuntu
+    host: 192.168.1.100
+    forward_agent: true
+    repos_root: /home/ubuntu/repos
+```
+
+The orchestrator constructs the full working directory as
+`repos_root / repo_name`, where `repo_name` comes from the project context:
+
+```
+/home/ubuntu/repos/unlimited-mcp
+/home/ubuntu/repos/client-project
+/home/ubuntu/repos/data-pipeline
+```
+
+Bootstrap a repo once:
+
+```python
+run_command(
+    ["git", "clone", "git@github.com:org/repo.git"],
+    cwd=host_config.repos_root,   # clones into repos_root/repo
+    exec_host="gpu_server",
+)
+```
+
+Then delegate with the full path:
+
+```python
+delegate_to_agent(
+    "aider_remote",
+    prompt="add docstrings to all public functions",
+    cwd=f"{host_config.repos_root}/unlimited-mcp",
+)
+```
+
+Passing an explicit `cwd` to `delegate_to_agent` overrides `repos_root`
+whenever you need to work outside the standard layout (e.g. a temp clone
+for a one-off experiment).
+
+---
+
+### Remote-only repo (no local clone)
+
+If the repo only lives on the remote machine, the orchestrator cannot review
+diffs locally.  As a workaround, delegate a code-review pass to a remote LLM
+worker:
+
+```python
+delegate_to_agent("claude_remote", prompt="Review the diff in /tmp/change.patch
+and summarise risks", host="gpu_server")
+```
+
+This is a minor limitation for most workflows; the preferred pattern is a
+shared GitHub repo (clone on both local and remote) so the orchestrator can
+`git fetch` and inspect the branch after the job completes.
+
+---
+
 ## Remote queue configuration (`remote_ts`)
 
 A `remote_ts` queue runs jobs on a remote SSH host using

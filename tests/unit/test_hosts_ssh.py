@@ -497,3 +497,79 @@ def test_connect_without_paramiko_raises() -> None:
     with patch.dict("sys.modules", {"paramiko": None}):  # type: ignore[dict-item]
         with pytest.raises((RuntimeError, ImportError)):
             host._connect()
+
+
+# ---------------------------------------------------------------------------
+# Agent forwarding
+# ---------------------------------------------------------------------------
+
+
+def test_forward_agent_uses_channel_path() -> None:
+    """When forward_agent=True the channel path is used and AgentRequestHandler fires."""
+    cfg = _config(forward_agent=True)
+    host = SshHost(cfg)
+
+    mock_channel = MagicMock()
+    mock_channel.recv_exit_status.return_value = 0
+
+    stdout_f = MagicMock()
+    stdout_f.read.return_value = b"ok\n"
+    stdout_f.channel = mock_channel
+
+    stderr_f = MagicMock()
+    stderr_f.read.return_value = b""
+
+    mock_channel.makefile.return_value = stdout_f
+    mock_channel.makefile_stderr.return_value = stderr_f
+    mock_channel.makefile_stdin.return_value = MagicMock()
+
+    mock_transport = MagicMock()
+    mock_transport.is_active.return_value = True
+    mock_transport.open_session.return_value = mock_channel
+
+    mock_client = MagicMock()
+    mock_client.get_transport.return_value = mock_transport
+    host._client = mock_client
+
+    mock_agent_handler = MagicMock()
+    mock_agent_mod = MagicMock()
+    mock_agent_mod.AgentRequestHandler = mock_agent_handler
+    mock_paramiko_mod = MagicMock()
+    mock_paramiko_mod.agent = mock_agent_mod
+
+    with patch.dict("sys.modules", {"paramiko": mock_paramiko_mod, "paramiko.agent": mock_agent_mod}):
+        out = host.run(["git", "push"])
+
+    mock_transport.open_session.assert_called_once()
+    mock_agent_handler.assert_called_once_with(mock_channel)
+    mock_channel.exec_command.assert_called_once()
+    assert out.stdout == b"ok\n"
+
+
+def test_no_forward_agent_skips_channel_path() -> None:
+    """Default config (forward_agent=False) uses exec_command, not open_session."""
+    host, mock_client = _patched_host(stdout=b"ok\n")
+    host.run(["git", "fetch"])
+    mock_client.exec_command.assert_called_once()
+    mock_client.get_transport.return_value.open_session.assert_not_called()
+
+
+# ---------------------------------------------------------------------------
+# repos_root
+# ---------------------------------------------------------------------------
+
+
+def test_repos_root_default_is_none() -> None:
+    cfg = _config()
+    assert cfg.repos_root is None
+
+
+def test_repos_root_parses_from_config() -> None:
+    cfg = _config(repos_root="/root/repos")
+    assert cfg.repos_root == "/root/repos"
+
+
+def test_repos_root_and_forward_agent_together() -> None:
+    cfg = _config(forward_agent=True, repos_root="/srv/repos")
+    assert cfg.forward_agent is True
+    assert cfg.repos_root == "/srv/repos"

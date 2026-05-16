@@ -96,6 +96,7 @@ class _HostBase(_Strict):
     deny_paths: list[str] | None = None
     default_safety_policy: DefaultSafetyPolicy | None = None
     allow_shell_like_argv: bool | None = None
+    repos_root: str | None = None
 
 
 class LocalHostConfig(_HostBase):
@@ -115,6 +116,7 @@ class SshHostConfig(_HostBase):
     # file's basename (e.g. "id_rsa") and fall back to the SSH user only when no
     # key_file is set. Lets several hosts share one keychain entry.
     key_passphrase_account: str | None = None
+    forward_agent: bool = False
 
 
 HostConfig = Annotated[
