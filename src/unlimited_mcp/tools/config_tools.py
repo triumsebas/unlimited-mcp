@@ -69,6 +69,8 @@ def list_capabilities(*, config: Config, knowledge: Knowledge) -> dict[str, Any]
             "host": getattr(h, "host", None),
             "user": getattr(h, "user", None),
             "port": getattr(h, "port", None),
+            "repos_root": getattr(h, "repos_root", None),
+            "forward_agent": getattr(h, "forward_agent", None),
         }
 
     queues = {}
