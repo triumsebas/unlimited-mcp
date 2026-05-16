@@ -345,10 +345,12 @@ class RemoteRunner:
     def _clarify_loop(
         self, job_id: str, remote_questions_dir: str, stop: threading.Event
     ) -> None:
+        log.info("RemoteRunner: clarify sync started for job %s at %s", job_id, remote_questions_dir)
         while not stop.wait(timeout=3.0):
             self._sync_clarify(job_id, remote_questions_dir)
         # One final sync after the job finishes to capture any last questions.
         self._sync_clarify(job_id, remote_questions_dir)
+        log.info("RemoteRunner: clarify sync stopped for job %s", job_id)
 
     def _sync_clarify(self, job_id: str, remote_questions_dir: str) -> None:
         """Sync clarify_rounds Q&A files between remote host and local JobStore.
@@ -366,7 +368,7 @@ class RemoteRunner:
             )
             remote_files = [p.strip() for p in out.stdout.decode().splitlines() if p.strip()]
         except Exception as exc:
-            log.debug("RemoteRunner: clarify ls failed for %s: %s", job_id, exc)
+            log.warning("RemoteRunner: clarify ls failed for %s: %s", job_id, exc)
             return
 
         for remote_q_path in remote_files:

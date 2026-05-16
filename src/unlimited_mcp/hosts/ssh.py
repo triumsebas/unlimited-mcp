@@ -23,6 +23,7 @@ from __future__ import annotations
 import os
 import shlex
 import subprocess
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
 from pathlib import Path
@@ -59,6 +60,7 @@ class SshHost:
         self._redactor = redactor
         self._client: paramiko.SSHClient | None = None
         self._ts_bin_cache: str | None = None
+        self._client_lock = threading.Lock()
         # Set when a configured passphrase source (env/keyring) is missing.
         # Non-fatal: we fall back to the ssh-agent and only surface this
         # reason if authentication ultimately fails.
@@ -190,18 +192,19 @@ class SshHost:
         return client
 
     def _get_client(self) -> paramiko.SSHClient:
-        if self._client is not None:
-            transport = self._client.get_transport()
-            if transport is not None and transport.is_active():
-                return self._client
-            try:
-                self._client.close()
-            except Exception:
-                pass
-            self._client = None
-            self._ts_bin_cache = None
-        self._client = self._connect()
-        return self._client
+        with self._client_lock:
+            if self._client is not None:
+                transport = self._client.get_transport()
+                if transport is not None and transport.is_active():
+                    return self._client
+                try:
+                    self._client.close()
+                except Exception:
+                    pass
+                self._client = None
+                self._ts_bin_cache = None
+            self._client = self._connect()
+            return self._client
 
     def close(self) -> None:
         if self._client is not None:
