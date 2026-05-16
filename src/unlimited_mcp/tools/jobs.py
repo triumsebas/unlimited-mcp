@@ -17,6 +17,7 @@ morning regardless of when it finished.
 from __future__ import annotations
 
 import subprocess
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
@@ -129,6 +130,31 @@ def get_job_result(job_id: str, *, runner: LocalRunner) -> JobResult:
         runner._store.write_result(result)
 
     return result
+
+
+def await_job(
+    job_id: str,
+    *,
+    poll_interval: float = 60.0,
+    runner: LocalRunner,
+) -> JobResult:
+    """Block until *job_id* reaches a terminal state, then return its result.
+
+    Polls every *poll_interval* seconds (default 60) server-side, so the
+    orchestrator makes a single MCP call instead of a polling loop.
+    Stamps ``seen_at`` on the result when the job completes (same as
+    ``get_job_result``).
+    """
+    while True:
+        result = runner.get_result(job_id)
+        if result is None:
+            return _not_found(job_id)
+        if result.status in _TERMINAL:
+            if result.seen_at is None:
+                result = result.model_copy(update={"seen_at": datetime.now(UTC)})
+                runner._store.write_result(result)
+            return result
+        time.sleep(poll_interval)
 
 
 def list_jobs(

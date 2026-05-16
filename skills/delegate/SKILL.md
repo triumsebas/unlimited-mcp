@@ -33,7 +33,7 @@ For quick tasks (< 30s) where you want to wait for the result in the same turn.
 1. add_allowed_root(cwd)
 2. result = delegate_to_agent(agent_name, prompt=prompt, cwd=cwd,
                               workspace='safe_dev', queue='local')
-3. Poll: while result.status == 'running': result = get_job_result(result.job_id)
+3. result = await_job(result.job_id)
 4. Return result.summary and result.branch (if applicable)
 ```
 

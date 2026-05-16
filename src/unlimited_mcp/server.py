@@ -69,6 +69,7 @@ from unlimited_mcp.observability.log_query import query_logs as _query_logs
 from unlimited_mcp.tools.jobs import cancel_job as _cancel_job
 from unlimited_mcp.tools.jobs import cleanup_branches as _cleanup_branches
 from unlimited_mcp.tools.jobs import cleanup_jobs as _cleanup_jobs
+from unlimited_mcp.tools.jobs import await_job as _await_job
 from unlimited_mcp.tools.jobs import get_job_result as _get_job_result
 from unlimited_mcp.tools.jobs import get_job_status as _get_job_status
 from unlimited_mcp.tools.jobs import list_jobs as _list_jobs
@@ -583,6 +584,17 @@ def make_server(
         are read, removing them from the default list_jobs() inbox view.
         """
         return _get_job_result(job_id, runner=runner)
+
+    @app.tool()
+    def await_job(job_id: str, poll_interval: float = 60.0) -> JobResult:
+        """Block until job_id finishes and return its final result.
+
+        Polls every poll_interval seconds (default 60) on the server side —
+        use this instead of a manual get_job_status loop to avoid flooding
+        the orchestrator context with intermediate polling calls.
+        Stamps seen_at on completion (same as get_job_result).
+        """
+        return _await_job(job_id, poll_interval=poll_interval, runner=runner)
 
     @app.tool()
     def list_jobs(

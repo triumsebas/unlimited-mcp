@@ -30,7 +30,7 @@ from unlimited_mcp.safety.argv_check import SafetyChecker, SafetyDecision
 if TYPE_CHECKING:
     from unlimited_mcp.agents.runner import AgentRunner
 
-_POLL_INTERVAL = 0.25
+_POLL_INTERVAL = 5.0
 
 
 # ---------------------------------------------------------------------------
