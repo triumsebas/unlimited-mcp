@@ -165,6 +165,61 @@ def test_delegate_to_agent_unknown_raises_tool_error(tmp_path: Path) -> None:
         _run(app.call_tool("delegate_to_agent", {"agent_name": "nonexistent"}))
 
 
+def test_delegate_to_agent_default_queue_does_not_shadow_agent_exec_host(
+    tmp_path: Path,
+) -> None:
+    """Regression: queue='local' (default) must not set runner_override to a LocalRunner.
+
+    If it did, the agent's own exec_host field would be silently ignored even when
+    the caller omits both exec_host and queue arguments.
+    """
+    from unittest.mock import MagicMock, patch
+
+    config_yaml = """\
+allowed_roots: []
+agents:
+  remote_echo:
+    cli: echo_cli
+    exec_host: some_remote_host
+"""
+    app = _make_server(tmp_path, config_yaml=config_yaml)
+
+    captured: dict = {}
+
+    def fake_delegate(agent_name, *, runner_override=None, exec_host_override=None, **kw):
+        captured["runner_override"] = runner_override
+        captured["exec_host_override"] = exec_host_override
+        # Return a minimal job-like dict so the tool doesn't crash
+        return {
+            "ok": True,
+            "job_id": "test-job",
+            "status": "completed",
+            "summary": "ok",
+            "diff_ref": None,
+            "branch": None,
+            "raw_output_ref": None,
+            "error": None,
+            "confirm_token": None,
+            "risk_level": "low",
+        }
+
+    with patch("unlimited_mcp.server._delegate_to_agent", side_effect=fake_delegate):
+        try:
+            _run(
+                app.call_tool(
+                    "delegate_to_agent",
+                    {"agent_name": "remote_echo", "prompt": "hello"},
+                )
+            )
+        except Exception:
+            pass  # agent not fully configured — we only care about captured values
+
+    # The fix: runner_override must be None when queue=='local' so agent's exec_host wins
+    assert captured.get("runner_override") is None, (
+        f"runner_override should be None when queue='local', got {captured.get('runner_override')!r}"
+    )
+
+
 # ---------------------------------------------------------------------------
 # run_and_summarize via MCP layer
 # ---------------------------------------------------------------------------

@@ -125,16 +125,88 @@ at runtime. Nothing is written to disk in plaintext.
 
 ### macOS — Keychain
 
-```bash
-# Store
-security add-generic-password -a "$(whoami)" -s "unlimited-mcp-ssh" \
-    -w "your-passphrase"
+This is the recommended option on a Mac: the SSH key passphrase lives in
+the login Keychain (encrypted by macOS, visible in **Keychain Access** /
+*Acceso a Llaveros*), and the MCP server reads it at connection time. The
+passphrase never goes into `config.yaml`, the chat, or any file.
 
-# Retrieve (example — the MCP calls this internally)
-security find-generic-password -a "$(whoami)" -s "unlimited-mcp-ssh" -w
+A keyring entry has two coordinates:
+
+- **service** — a label you choose (e.g. `unlimited-mcp-ssh`). Goes in
+  `key_passphrase_keyring`.
+- **account** — *which* secret inside that service. By default the MCP
+  looks it up by the **name of your private key file**
+  (`key_file` basename, e.g. `id_rsa` or `id_ed25519`), **not** the
+  remote SSH user. The passphrase belongs to *your local key*, so this
+  lets several hosts that share one key reuse a **single** Keychain
+  entry. Override it with `key_passphrase_account` if you want a custom
+  name.
+
+#### 1. Store the passphrase
+
+Run this once **in your own terminal** (not through the MCP, so the
+secret never appears in any transcript):
+
+```bash
+security add-generic-password -U -A -s "unlimited-mcp-ssh" -a "id_rsa" -w
 ```
 
-In `config.yaml`:
+- `-s` service — must match `key_passphrase_keyring` in `config.yaml`.
+- `-a` account — must match the key basename (or your
+  `key_passphrase_account`). Here: `id_rsa`.
+- `-w` **with nothing after it** → macOS prompts you interactively
+  (hidden input, asked twice). This is the safe form.
+- `-U` updates the entry if it already exists.
+- `-A` lets any of your apps read it **without a per-access dialog**.
+  **This is effectively required for the MCP server** — it runs
+  headless and cannot answer the macOS Keychain prompt. Omitting `-A`
+  is the single most common reason a correctly-stored passphrase still
+  "doesn't work" (see step 2).
+
+> ⚠️ **Argument-order pitfall:** `-w` accepts an *optional* inline value,
+> so `... -w -U` makes `security` store the literal string `-U` as your
+> "passphrase" and never prompts you. Always put `-w` **last** with no
+> value, and the other flags before it, exactly as shown above.
+
+#### 2. macOS authorization — why `-A` matters
+
+The MCP server runs as a Python process launched by the host app (e.g.
+Claude). When that process reads the Keychain item, macOS enforces the
+item's access control list (ACL). If the server's process is not on the
+ACL, macOS would normally show *"<app> wants to use information stored
+in your keychain"* — but the server is **headless** and there is no one
+to click it, so the read **fails silently** (returns nothing).
+
+What that failure looks like (important — it is *not* an obvious
+"permission denied"):
+
+- The server gets an empty passphrase, tries the encrypted key without
+  it, and the SSH job fails with a **misleading** error such as
+  `encountered RSA key, expected OPENSSH key` or
+  `Private key file is encrypted`.
+- The same entry reads fine from *your* terminal (`security
+  find-generic-password ... -w` works), which makes it look like the
+  entry is correct — it is; the server just can't reach it.
+
+`-A` puts *all* your apps on the ACL, so the headless server reads it
+with no dialog. This is why **the working command in step 1 includes
+`-A`**, and re-storing without it silently breaks the server.
+
+Tighter alternative (more secure, more setup): drop `-A` and authorize
+only the exact interpreter the server runs:
+
+```bash
+# Find the interpreter the server uses (the path after the venv):
+#   ps -o command= -p "$(pgrep -f 'unlimited.mcp serve' | head -1)"
+security add-generic-password -U -s "unlimited-mcp-ssh" -a "id_rsa" \
+    -T /path/to/.venv/bin/python3 -w
+```
+
+Note `-T` ties the entry to that exact binary path; if the venv or
+Python version changes you must re-grant. For most setups `-A` with a
+dedicated SSH passphrase is the pragmatic choice.
+
+#### 3. Point `config.yaml` at it
 
 ```yaml
 hosts:
@@ -142,8 +214,71 @@ hosts:
     type: ssh
     user: ubuntu
     host: 192.168.1.100
-    key_passphrase_keyring: unlimited-mcp-ssh   # keychain service name
+    key_file: ~/.ssh/id_rsa
+    key_passphrase_keyring: unlimited-mcp-ssh   # = service (-s)
+    # key_passphrase_account: id_rsa            # optional; defaults to
+    #                                             the key_file basename
 ```
+
+Two hosts sharing the same key need **no duplicate entry** — both resolve
+to account `id_rsa`:
+
+```yaml
+hosts:
+  localbox:
+    type: ssh
+    user: mcp
+    host: localhost
+    key_file: ~/.ssh/id_rsa
+    key_passphrase_keyring: unlimited-mcp-ssh
+  vps:
+    type: ssh
+    user: root
+    host: 203.0.113.10
+    key_file: ~/.ssh/id_rsa
+    key_passphrase_keyring: unlimited-mcp-ssh
+```
+
+#### 4. Verify it is stored correctly
+
+Three quick checks, none of which print the secret. Run them in a
+private terminal.
+
+**a. The entry exists with the expected account:**
+
+```bash
+security find-generic-password -s "unlimited-mcp-ssh" -a "id_rsa" \
+    | grep '"acct"'
+```
+
+**b. The stored value actually unlocks the key** (catches typos and the
+`-w -U` pitfall — a wrong passphrase fails here):
+
+```bash
+PASS=$(security find-generic-password -s "unlimited-mcp-ssh" -a "id_rsa" -w)
+ssh-keygen -y -P "$PASS" -f ~/.ssh/id_rsa >/dev/null 2>&1 \
+    && echo "OK: passphrase unlocks the key" \
+    || echo "WRONG: stored value does not unlock the key — re-store it"
+unset PASS
+```
+
+**c. The MCP server's interpreter can read it** (catches the missing
+`-A` / ACL problem from step 2 — this is the check that matters, since
+the server, not your shell, is what fails):
+
+```bash
+# Use the SAME python the server runs (the project venv):
+/path/to/.venv/bin/python3 -c \
+  "import keyring; v=keyring.get_password('unlimited-mcp-ssh','id_rsa'); \
+   print('readable, len', len(v)) if v else print('NOT readable — re-store with -A')"
+```
+
+If (b) says OK and (c) says readable, the entry is correct. Then test a
+host end-to-end: `run_command(['hostname'], exec_host='vps')`.
+
+> If (b) is OK but the SSH job still fails with `encountered RSA key,
+> expected OPENSSH key` / `Private key file is encrypted`, it is almost
+> always (c) failing: re-store the entry **with `-A`** (step 1).
 
 ### Linux — GNOME Keyring / secret-tool
 
@@ -304,3 +439,15 @@ agents.
 
 **"Host key verification failed"**
 - The remote host is not in `~/.ssh/known_hosts`: connect manually once with `ssh user@host` and accept the fingerprint.
+
+**"Private key file is encrypted" (Keychain option)**
+- The MCP can't reach the passphrase. Check the Keychain account matches:
+  by default it's the `key_file` basename (`id_rsa`), *not* the SSH user.
+  Set `key_passphrase_account` or store the entry under the right account.
+- macOS may be silently blocking the read with an authorization dialog —
+  see *macOS authorization note* above; use **Always Allow** or `-A`.
+
+**Keychain entry stores `-U` (or another flag) as the passphrase**
+- The `security ... -w -U ...` argument-order pitfall: `-w` swallowed the
+  next flag as its value. Re-store with `-w` **last**:
+  `security add-generic-password -U -A -s SERVICE -a ACCOUNT -w`

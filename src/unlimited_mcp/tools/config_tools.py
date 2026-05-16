@@ -330,6 +330,7 @@ def add_host(
     key_file: str | None = None,
     key_passphrase_env: str | None = None,
     key_passphrase_keyring: str | None = None,
+    key_passphrase_account: str | None = None,
     config_store: ConfigStore,
 ) -> dict[str, Any]:
     """Add or replace an SSH host entry in config.yaml.
@@ -348,6 +349,7 @@ def add_host(
             "key_file": key_file,
             "key_passphrase_env": key_passphrase_env,
             "key_passphrase_keyring": key_passphrase_keyring,
+            "key_passphrase_account": key_passphrase_account,
         }
     )
 
@@ -365,6 +367,8 @@ def add_host(
             entry["key_passphrase_env"] = key_passphrase_env
         if key_passphrase_keyring:
             entry["key_passphrase_keyring"] = key_passphrase_keyring
+        if key_passphrase_account:
+            entry["key_passphrase_account"] = key_passphrase_account
         hosts[name] = entry
 
     config_store.update(_mutate)

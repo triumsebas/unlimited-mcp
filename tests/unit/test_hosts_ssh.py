@@ -273,12 +273,15 @@ def test_passphrase_from_env(monkeypatch: pytest.MonkeyPatch) -> None:
     assert host._resolve_passphrase() == "s3cr3t"
 
 
-def test_passphrase_env_missing_raises(monkeypatch: pytest.MonkeyPatch) -> None:
+def test_passphrase_env_missing_is_non_fatal(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A missing env var is non-fatal: returns None and records the reason
+    so the connection can still fall back to the ssh-agent."""
     monkeypatch.delenv("NO_SUCH_VAR", raising=False)
     cfg = _config(key_passphrase_env="NO_SUCH_VAR")
     host = SshHost(cfg)
-    with pytest.raises(RuntimeError, match="is not set"):
-        host._resolve_passphrase()
+    assert host._resolve_passphrase() is None
+    assert host._passphrase_missing_reason is not None
+    assert "NO_SUCH_VAR" in host._passphrase_missing_reason
 
 
 def test_no_passphrase_fields_returns_none() -> None:
@@ -291,7 +294,8 @@ def test_no_passphrase_fields_returns_none() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_passphrase_from_keyring() -> None:
+def test_passphrase_from_keyring_account_falls_back_to_user() -> None:
+    """Without key_file, the keyring account defaults to the SSH user."""
     cfg = _config(key_passphrase_keyring="unlimited-mcp-ssh")
     host = SshHost(cfg)
 
@@ -305,16 +309,60 @@ def test_passphrase_from_keyring() -> None:
     assert result == "kr_pass"
 
 
-def test_passphrase_keyring_not_found_raises() -> None:
-    cfg = _config(key_passphrase_keyring="unlimited-mcp-ssh")
+def test_passphrase_keyring_account_defaults_to_key_basename() -> None:
+    """With key_file set, the keyring account defaults to its basename,
+    so several hosts sharing one key reuse a single keychain entry."""
+    cfg = _config(
+        key_passphrase_keyring="unlimited-mcp-ssh",
+        key_file="~/.ssh/id_rsa",
+    )
+    host = SshHost(cfg)
+
+    mock_keyring = MagicMock()
+    mock_keyring.get_password.return_value = "kr_pass"
+
+    with patch.dict("sys.modules", {"keyring": mock_keyring}):
+        result = host._resolve_passphrase()
+
+    mock_keyring.get_password.assert_called_once_with("unlimited-mcp-ssh", "id_rsa")
+    assert result == "kr_pass"
+
+
+def test_passphrase_keyring_account_explicit_override() -> None:
+    """key_passphrase_account wins over both key_file basename and user."""
+    cfg = _config(
+        key_passphrase_keyring="unlimited-mcp-ssh",
+        key_file="~/.ssh/id_rsa",
+        key_passphrase_account="shared",
+    )
+    host = SshHost(cfg)
+
+    mock_keyring = MagicMock()
+    mock_keyring.get_password.return_value = "kr_pass"
+
+    with patch.dict("sys.modules", {"keyring": mock_keyring}):
+        host._resolve_passphrase()
+
+    mock_keyring.get_password.assert_called_once_with("unlimited-mcp-ssh", "shared")
+
+
+def test_passphrase_keyring_not_found_is_non_fatal() -> None:
+    """A missing keyring entry is non-fatal: returns None and records the
+    reason so the connection can still fall back to the ssh-agent."""
+    cfg = _config(
+        key_passphrase_keyring="unlimited-mcp-ssh",
+        key_file="~/.ssh/id_rsa",
+    )
     host = SshHost(cfg)
 
     mock_keyring = MagicMock()
     mock_keyring.get_password.return_value = None
 
     with patch.dict("sys.modules", {"keyring": mock_keyring}):
-        with pytest.raises(RuntimeError, match="No passphrase found in keyring"):
-            host._resolve_passphrase()
+        assert host._resolve_passphrase() is None
+
+    assert host._passphrase_missing_reason is not None
+    assert "id_rsa" in host._passphrase_missing_reason
 
 
 # ---------------------------------------------------------------------------
@@ -369,6 +417,74 @@ def test_no_key_file_enables_look_for_keys() -> None:
     call_kwargs = mock_client.connect.call_args[1]
     assert call_kwargs["look_for_keys"] is True
     assert "key_filename" not in call_kwargs
+
+
+# ---------------------------------------------------------------------------
+# Fallback: missing keyring entry → try ssh-agent instead of hard-failing
+# ---------------------------------------------------------------------------
+
+
+def _mock_paramiko_with_exc(agent_keys: int = 0) -> tuple[MagicMock, MagicMock]:
+    """Like _mock_paramiko but with a real SSHException class and a
+    controllable Agent().get_keys() length."""
+    mock_mod, mock_client = _mock_paramiko()
+
+    class _SSHException(Exception):
+        pass
+
+    mock_mod.SSHException = _SSHException
+    agent = MagicMock()
+    agent.get_keys.return_value = [object()] * agent_keys
+    mock_mod.Agent.return_value = agent
+    return mock_mod, mock_client
+
+
+def test_missing_keyring_falls_back_to_agent_connect() -> None:
+    """Keyring entry absent → _connect still proceeds (no passphrase) so
+    paramiko can authenticate via the ssh-agent."""
+    cfg = _config(
+        key_passphrase_keyring="unlimited-mcp-ssh",
+        key_file="~/.ssh/id_rsa",
+    )
+    host = SshHost(cfg)
+
+    mock_keyring = MagicMock()
+    mock_keyring.get_password.return_value = None
+    mock_mod, mock_client = _mock_paramiko_with_exc(agent_keys=1)
+
+    with patch.dict(
+        "sys.modules", {"keyring": mock_keyring, "paramiko": mock_mod}
+    ):
+        host._connect()
+
+    call_kwargs = mock_client.connect.call_args[1]
+    assert call_kwargs["allow_agent"] is True
+    assert "passphrase" not in call_kwargs  # none was available
+    assert host._passphrase_missing_reason is not None
+
+
+def test_missing_keyring_and_agent_fail_gives_clear_error() -> None:
+    """When the keyring entry is absent AND the agent fallback fails to
+    authenticate, surface the missing-passphrase reason (not paramiko's
+    misleading key-format error)."""
+    cfg = _config(
+        key_passphrase_keyring="unlimited-mcp-ssh",
+        key_file="~/.ssh/id_rsa",
+    )
+    host = SshHost(cfg)
+
+    mock_keyring = MagicMock()
+    mock_keyring.get_password.return_value = None
+    mock_mod, mock_client = _mock_paramiko_with_exc(agent_keys=0)
+    mock_client.connect.side_effect = mock_mod.SSHException(
+        "encountered RSA key, expected OPENSSH key"
+    )
+
+    with patch.dict(
+        "sys.modules", {"keyring": mock_keyring, "paramiko": mock_mod}
+    ):
+        with pytest.raises(RuntimeError, match="Configured passphrase unavailable"):
+            host._connect()
 
 
 # ---------------------------------------------------------------------------

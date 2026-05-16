@@ -398,8 +398,11 @@ Any MCP-compatible orchestrator should work with no or minor changes. If you tes
 - `query_logs` for operational observability
 - Local inference: Ollama, MLX, LM Studio (any OpenAI-compatible endpoint)
 
-### 🔜 Phase 3 — Remote execution
-- **SSH backend** — delegate tasks to remote machines; audit and update server fleets in parallel *(architecture ready — looking for contributors with infrastructure to test)*
+### ✅ Phase 3 — Remote execution (in progress)
+- **SSH backend** — delegate tasks to remote machines; run commands, agents, and prompt-via-file over SSH.
+  Authentication: macOS Keychain (tested ✓) · ssh-agent (tested ✓) · Linux keyring (pending).
+  In **Claude Desktop**, the server has no SSH agent socket — use Keychain. In **Claude Code (terminal)**, both ssh-agent and Keychain work.
+  See [SSH.md](SSH.md) for setup.
 - **Remote GPU clusters** — submit jobs to remote Ollama/MLX/LM Studio servers
 - **Anthropic direct provider** — query Claude models directly as a provider for summarization, analysis, and review tasks without going through an agent CLI
 
@@ -428,7 +431,7 @@ Any MCP-compatible orchestrator should work with no or minor changes. If you tes
 
 - **Large project users** — if you're working on a big codebase or running heavy automation, your feedback is the most valuable thing right now. Real-world usage exposes what toy examples don't.
 - **New agent CLIs** — if you use a coding agent not in the knowledge base, add it
-- **SSH backend** (Phase 3) — the architecture is nearly complete; what's missing is people with real server infrastructure to test it against
+- **SSH backend** (Phase 3) — keyring + agent auth shipped and tested on macOS; Linux keyring and Windows are still needed
 - **Tests** — the test suite grows with every feature, more coverage always helps
 - **Documentation** — walkthroughs, examples, and troubleshooting guides
 

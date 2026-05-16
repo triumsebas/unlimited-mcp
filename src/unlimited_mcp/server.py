@@ -448,8 +448,15 @@ def make_server(
                             exec_host='gpu_server')
         """
         # exec_host wins over queue; resolve runner accordingly.
+        # When neither an explicit exec_host nor a non-default queue is given,
+        # leave runner_override None so AgentRunner honours the agent's own
+        # exec_host field (a forced "local" runner here would shadow it).
         resolved_host = exec_host  # may be None → AgentRunner reads agent_cfg.exec_host
-        runner_override = None if resolved_host else _pick_runner(queue)
+        runner_override = (
+            None
+            if (resolved_host or queue == "local")
+            else _pick_runner(queue)
+        )
 
         return _delegate_to_agent(
             agent_name,
@@ -861,6 +868,7 @@ def make_server(
         key_file: str | None = None,
         key_passphrase_env: str | None = None,
         key_passphrase_keyring: str | None = None,
+        key_passphrase_account: str | None = None,
     ) -> dict[str, Any]:
         """Add or replace an SSH host in config.yaml.
 
@@ -874,6 +882,10 @@ def make_server(
         key_file: Path to a specific private key (optional — agent/default keys are tried first).
         key_passphrase_env: Name of an env var holding the key passphrase (never the value itself).
         key_passphrase_keyring: Keychain service name holding the passphrase.
+        key_passphrase_account: Keychain account for the passphrase lookup.
+            Defaults to the key_file basename (e.g. 'id_rsa'), falling back to
+            the SSH user. Set this so several hosts sharing one private key can
+            reuse a single keychain entry.
 
         Call ssh_trust_host(host, port) first if the machine is not yet in known_hosts.
         Example: add_host('gpu_server', host='192.168.1.100', user='ubuntu')
@@ -884,6 +896,7 @@ def make_server(
             key_file=key_file,
             key_passphrase_env=key_passphrase_env,
             key_passphrase_keyring=key_passphrase_keyring,
+            key_passphrase_account=key_passphrase_account,
             config_store=cfg_store,
         )
 

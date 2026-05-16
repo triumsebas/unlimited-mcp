@@ -59,6 +59,10 @@ class SshHost:
         self._redactor = redactor
         self._client: paramiko.SSHClient | None = None
         self._ts_bin_cache: str | None = None
+        # Set when a configured passphrase source (env/keyring) is missing.
+        # Non-fatal: we fall back to the ssh-agent and only surface this
+        # reason if authentication ultimately fails.
+        self._passphrase_missing_reason: str | None = None
 
     @property
     def name(self) -> str:
@@ -70,13 +74,23 @@ class SshHost:
     # ------------------------------------------------------------------
 
     def _resolve_passphrase(self) -> str | None:
+        """Return the configured key passphrase, or ``None``.
+
+        A configured-but-unavailable source (missing env var / keyring
+        entry) is **not** fatal: it records a reason on
+        ``self._passphrase_missing_reason`` and returns ``None`` so the
+        connection can still fall back to the ssh-agent. The reason is
+        only surfaced if authentication ultimately fails.
+        """
         cfg = self._config
+        self._passphrase_missing_reason = None
         if cfg.key_passphrase_env:
             val = os.environ.get(cfg.key_passphrase_env)
             if val is None:
-                raise RuntimeError(
+                self._passphrase_missing_reason = (
                     f"SSH passphrase env var {cfg.key_passphrase_env!r} is not set"
                 )
+                return None
             return val
         if cfg.key_passphrase_keyring:
             try:
@@ -85,12 +99,21 @@ class SshHost:
                 raise RuntimeError(
                     "keyring package not installed; run: pip install 'unlimited-mcp[ssh]'"
                 ) from exc
-            val = _keyring.get_password(cfg.key_passphrase_keyring, cfg.user)
-            if val is None:
-                raise RuntimeError(
-                    f"No passphrase found in keyring for service "
-                    f"{cfg.key_passphrase_keyring!r}, account {cfg.user!r}"
+            # The passphrase unlocks the local private key, so key it by the
+            # key file (basename) rather than the remote SSH user. This lets
+            # multiple hosts sharing one key reuse a single keychain entry.
+            account = cfg.key_passphrase_account
+            if not account:
+                account = (
+                    Path(cfg.key_file).name if cfg.key_file else cfg.user
                 )
+            val = _keyring.get_password(cfg.key_passphrase_keyring, account)
+            if val is None:
+                self._passphrase_missing_reason = (
+                    f"no passphrase found in keyring for service "
+                    f"{cfg.key_passphrase_keyring!r}, account {account!r}"
+                )
+                return None
             return val
         return None
 
@@ -139,7 +162,31 @@ class SshHost:
         if passphrase is not None:
             kwargs["passphrase"] = passphrase
 
-        client.connect(**kwargs)
+        try:
+            agent_key_count = len(_paramiko.Agent().get_keys())
+        except Exception:
+            agent_key_count = 0
+
+        try:
+            client.connect(**kwargs)
+        except _paramiko.SSHException as exc:
+            # Authentication failed. If a configured passphrase source was
+            # unavailable AND the agent couldn't authenticate either, the
+            # missing secret is the likely root cause — surface it now
+            # (it was intentionally non-fatal so the agent could be tried).
+            if self._passphrase_missing_reason is not None:
+                raise RuntimeError(
+                    f"SSH authentication to {self.name} failed. "
+                    f"Configured passphrase unavailable ("
+                    f"{self._passphrase_missing_reason}) and the ssh-agent "
+                    f"fallback did not authenticate "
+                    f"({agent_key_count} key(s) loaded; "
+                    f"SSH_AUTH_SOCK="
+                    f"{os.environ.get('SSH_AUTH_SOCK') or 'unset'}). "
+                    f"Add the keyring/env entry, or load the key into the "
+                    f"agent (ssh-add)."
+                ) from exc
+            raise
         return client
 
     def _get_client(self) -> paramiko.SSHClient:

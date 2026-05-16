@@ -110,6 +110,11 @@ class SshHostConfig(_HostBase):
     key_file: str | None = None
     key_passphrase_env: str | None = None
     key_passphrase_keyring: str | None = None
+    # Keyring account used for the passphrase lookup. The passphrase belongs to
+    # the local private key, not to the remote SSH user, so default to the key
+    # file's basename (e.g. "id_rsa") and fall back to the SSH user only when no
+    # key_file is set. Lets several hosts share one keychain entry.
+    key_passphrase_account: str | None = None
 
 
 HostConfig = Annotated[
