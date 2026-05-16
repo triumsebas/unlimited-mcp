@@ -493,7 +493,7 @@ def make_server(
         if resolved_host:
             _effective_host = resolved_host
         else:
-            _agent_cfg = cfg_store.load().agents.get(agent_name)
+            _agent_cfg = cfg_store.get().agents.get(agent_name)
             _effective_host = (_agent_cfg.exec_host if _agent_cfg and _agent_cfg.exec_host else None) or "local"
 
         return _delegate_to_agent(
