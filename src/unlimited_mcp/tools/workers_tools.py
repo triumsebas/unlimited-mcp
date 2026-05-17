@@ -55,10 +55,22 @@ def get_worker_questions(job_id: str, *, runner: LocalRunner) -> dict[str, Any]:
     check whether it is waiting for answers.  Returns an empty list when the
     job was not started with ``clarify_rounds > 0`` or has not written any
     questions yet.
+
+    When ``pending_round`` is null and the job is still running, the agent has
+    not written its questions yet.  Wait ``poll_interval_hint`` seconds before
+    calling again — the agent syncs files every ~3 s, so polling faster than
+    that wastes tokens without gaining information.
     """
     q_dir = runner._store.questions_dir(job_id)
     if not q_dir.exists():
-        return {"job_id": job_id, "rounds": [], "timed_out": False}
+        return {
+            "job_id": job_id,
+            "rounds": [],
+            "pending_round": None,
+            "timed_out": False,
+            "timeout_info": None,
+            "poll_interval_hint": 5,
+        }
 
     answered: set[int] = set()
     questions_by_round: dict[int, list[Any]] = {}
@@ -94,12 +106,16 @@ def get_worker_questions(job_id: str, *, runner: LocalRunner) -> dict[str, Any]:
         for n in sorted(questions_by_round)
     ]
 
+    pending_round = next((r["round"] for r in rounds if not r["answered"]), None)
     return {
         "job_id": job_id,
         "rounds": rounds,
-        "pending_round": next((r["round"] for r in rounds if not r["answered"]), None),
+        "pending_round": pending_round,
         "timed_out": timed_out,
         "timeout_info": timeout_info,
+        # Hint: if pending_round is set, call answer_worker_questions immediately.
+        # If null and job is still running, wait this many seconds before re-polling.
+        "poll_interval_hint": 0 if pending_round else 5,
     }
 
 

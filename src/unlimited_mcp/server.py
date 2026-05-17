@@ -1216,10 +1216,18 @@ def make_server(
         rounds are answered.  Also indicates timed_out=true if the agent
         exhausted its wait budget.
 
+        The response includes poll_interval_hint (seconds):
+          - 0  → pending_round is set, call answer_worker_questions immediately.
+          - 5  → no questions yet, wait this long before polling again.
+        Do NOT poll in a tight loop — the agent syncs files every ~3 s so
+        polling faster than poll_interval_hint wastes tokens with no benefit.
+
         Example flow:
           result = get_worker_questions(job_id)
           if result['pending_round']:
               answer_worker_questions(job_id, result['pending_round'], [...])
+          elif not result['timed_out']:
+              # wait poll_interval_hint seconds, then try again
         """
         return _get_worker_questions(job_id, runner=runner)
 
