@@ -412,11 +412,22 @@ Any MCP-compatible orchestrator should work with no or minor changes. If you tes
 
 ---
 
+## Security
+
+`unlimited-mcp` runs commands with **your** privileges over a local stdio
+transport — there is no network listener, but the safety layer is a best-effort
+guardrail, **not an OS-level sandbox**. Read the
+[**Security / Threat model**](SECURITY.md) before pointing it at anything you
+care about.
+
+---
+
 ## Documentation
 
 | File | What it's for |
 |---|---|
 | [README.md](README.md) | This file — overview, quick start, use cases, roadmap |
+| [SECURITY.md](SECURITY.md) | Threat model — access model, privilege level, what the safety layer does and does not protect |
 | [CLAUDE.md](CLAUDE.md) | Companion guide for **Claude Code** — decision trees, tool reference, delegation patterns |
 | [AGENTS.md](AGENTS.md) | Companion guide for **Codex** and other orchestrators — same content, adapted framing |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | How to add agents, run tests, contribute code |
