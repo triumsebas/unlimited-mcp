@@ -169,10 +169,33 @@ delegate_to_agent(
 )
 ```
 
-El agente escribe **todas sus preguntas de golpe** en un fichero por ronda,
-espera las respuestas (máx. 300 s en total) y luego trabaja.  Si agota el tiempo
-sale con código 2; inspecciona el job dir para ver la pregunta pendiente y usa
-`resume_agent_task` para relanzar con el contexto inyectado.
+El protocolo de Q&A (cómo y cuándo preguntar, formato de fichero, marcador de
+"sin preguntas") se **inyecta por código** en el prompt del worker siempre que
+`clarify_rounds > 0`. Tú (orquestador) **solo pasas el número** — no repitas
+instrucciones de Q&A en el prompt; el worker ya las recibe de forma
+determinista. El agente escribe **todas sus preguntas de golpe** en un fichero
+por ronda, o un `[]` vacío si no tiene dudas, y luego trabaja. Si agota el
+tiempo de espera de respuestas sale con código 2; usa `resume_agent_task` para
+relanzar con el contexto inyectado.
+
+**Recoger las preguntas — usa `await_worker_questions(job_id)`, no polling:**
+
+```python
+r = delegate_to_agent(agent_name=..., prompt=..., clarify_rounds=1, ...)
+res = await_worker_questions(r['job_id'])   # UNA llamada, bloquea en servidor
+```
+
+`await_worker_questions` bloquea en el servidor y devuelve una sola vez según
+`outcome`:
+
+- `"questions"` → responde con `answer_worker_questions`.
+- `"no_questions"` → el agente escribió `[]`, está trabajando. No vuelvas a llamar.
+- `"job_finished"` → terminó sin preguntar.
+- `"timed_out"` → usa `resume_agent_task`.
+- `"wait_expired"` → sigue explorando; vuelve a llamar (un round-trip, no un bucle).
+
+Un worker que tarda 200-600 s en preguntar te cuesta **una** tool call, no
+docenas de sondeos. No uses `get_worker_questions` en bucle.
 
 **Usa `clarify_rounds >= 1` solo cuando SE CUMPLAN TODAS estas condiciones:**
 
@@ -185,7 +208,51 @@ sale con código 2; inspecciona el job dir para ver la pregunta pendiente y usa
 - La tarea es suficientemente corta como para que sea más barato relanzarla que invertir tiempo en Q&A
 - El prompt ya nombra ficheros, funciones o criterios de aceptación concretos
 
-Límites: 5 rondas máximo, 300 s de espera total.
+Límites: 5 rondas máximo, 600 s de espera de respuestas por defecto. Este
+presupuesto se **suma automáticamente** a `timeout_seconds` cuando
+`clarify_rounds > 0` — no lo sumes tú a mano (ver Timeout guide).
+
+---
+
+## Agrupar varias tareas/PRs en una delegación
+
+Cada delegación es una sesión nueva: el worker re-explora el repo desde cero,
+y esa exploración domina la latencia. Antes de delegar, decide el
+agrupamiento. **La pregunta de fondo: ¿el worker necesitaría el mismo contexto
+para hacer A y B?** Si sí, una delegación amortiza la exploración; si no,
+sepáralas.
+
+Checklist mental antes de delegar:
+
+1. **¿Tocan los mismos ficheros o módulo?** → juntos (el contexto re-explorado es idéntico).
+2. **¿Una depende de la otra?** (B necesita lo de A) → juntos y numerados en el prompt.
+3. **¿Mismo dominio conceptual?** (todo "logging", todo "auth") → juntos aunque cambien ficheros distintos.
+4. Si la respuesta a las tres es no → **delegaciones separadas**, corren en paralelo.
+
+Tope al agrupar: **máx. ~3-4 sub-tareas** y diff combinado revisable de una
+sentada. Nunca agrupes por conveniencia ("ya que estamos"): sin contexto
+compartido real solo añades riesgo — un timeout o un mal supuesto tira todo el
+lote y el diff se vuelve irrevisable.
+
+---
+
+## Agentes que corren en GPU local (`speed_tier` slow/unusable)
+
+Aplica **solo** a agentes cuyo modelo se ejecuta en una GPU local de la
+máquina (el usuario los eligió por privacidad o coste — es su decisión, no la
+cuestiones). **No confundir** con agentes de nombre "local" que en realidad
+proxyean a una API cloud (LM Studio/MLX apuntando a un endpoint remoto): esos
+siguen los tiers cloud normales, no esta sección.
+
+Un modelo en GPU local re-lee plan + código cada llamada y es lentísimo
+explorando. Disciplina de prompt, no de infra:
+
+- **No uses `clarify_rounds`** — `clarify_rounds=0` siempre. La fase de Q&A
+  añade exploración y espera que en GPU local no compensa; resuelve la
+  ambigüedad tú en el prompt.
+- **Prompt sin ambigüedad**: objetivo concreto y criterio de aceptación explícito.
+- **Nombra los ficheros o directorios exactos** que debe mirar, para que NO
+  recorra el repo entero. Es la palanca que más recorta la latencia.
 
 ---
 
@@ -232,9 +299,11 @@ Step 3 — apply the multiplier from this table:
 | `slow` | 10–20× | Local GPU (MLX, llama.cpp, consumer card) |
 | `unusable` | 50×+ | Local CPU — only for tiny tasks |
 
-Step 4 — add Q&A budget when `clarify_rounds > 0`:
+Step 4 — Q&A budget: **no lo sumes**. Cuando `clarify_rounds > 0` el servidor
+extiende `timeout_seconds` automáticamente con `clarify.max_total_seconds`
+(600 s por defecto). Pasa solo el presupuesto de trabajo:
 ```
-timeout_seconds = (claude_estimate × multiplier) + (clarify_rounds × max_total_seconds)
+timeout_seconds = claude_estimate × multiplier
 ```
 
 Add extra margin for test/retry loops — agents often run tests, hit failures,

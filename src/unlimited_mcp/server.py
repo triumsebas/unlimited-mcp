@@ -80,6 +80,7 @@ from unlimited_mcp.tools.knowledge_tools import (
 )
 from unlimited_mcp.tools.workers_tools import (
     answer_worker_questions as _answer_worker_questions,
+    await_worker_questions as _await_worker_questions,
     get_worker_questions as _get_worker_questions,
     resume_agent_task as _resume_agent_task,
 )
@@ -1216,6 +1217,13 @@ def make_server(
         rounds are answered.  Also indicates timed_out=true if the agent
         exhausted its wait budget.
 
+        Prefer await_worker_questions for the normal flow — it blocks
+        server-side and returns once, instead of you polling this in a loop.
+        Use get_worker_questions for a single point-in-time check.
+
+        no_questions=true means the agent wrote an empty round (nothing to
+        ask) and is working — stop polling this job.
+
         The response includes poll_interval_hint (seconds):
           - 0  → pending_round is set, call answer_worker_questions immediately.
           - 5  → no questions yet, wait this long before polling again.
@@ -1230,6 +1238,33 @@ def make_server(
               # wait poll_interval_hint seconds, then try again
         """
         return _get_worker_questions(job_id, runner=runner)
+
+    @app.tool()
+    def await_worker_questions(
+        job_id: str,
+        max_wait: float = 600.0,
+    ) -> dict[str, Any]:
+        """Block server-side until a clarify job needs you, then return once.
+
+        Preferred over polling get_worker_questions in a loop.  After
+        delegating with clarify_rounds > 0, call this once.  It returns as
+        soon as the first of these happens (field ``outcome``):
+
+          - "questions"    → agent asked; pending_round/rounds carry them.
+                             Call answer_worker_questions next.
+          - "no_questions" → agent wrote an empty round: nothing to ask,
+                             it is working.  Do not call again.
+          - "job_finished" → job reached a terminal state without asking.
+          - "timed_out"    → agent gave up waiting; use resume_agent_task.
+          - "wait_expired" → max_wait elapsed, agent still exploring.
+                             Call again to keep waiting (one round-trip,
+                             not a polling loop).
+
+        A worker that takes 200-600 s to write its first questions costs you
+        a single tool call here, not dozens of polls.  max_wait bounds only
+        one call; re-invoking continues waiting from where it left off.
+        """
+        return _await_worker_questions(job_id, runner=runner, max_wait=max_wait)
 
     @app.tool()
     def answer_worker_questions(

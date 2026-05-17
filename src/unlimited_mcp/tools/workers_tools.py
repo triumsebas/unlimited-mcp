@@ -28,9 +28,12 @@ from __future__ import annotations
 
 import json
 import re
+import time
 from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
+
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 from unlimited_mcp.jobs.result import JobResult
 from unlimited_mcp.jobs.store import JobStore
@@ -78,6 +81,7 @@ def get_worker_questions(job_id: str, *, runner: LocalRunner) -> dict[str, Any]:
             "job_id": job_id,
             "rounds": [],
             "pending_round": None,
+            "no_questions": False,
             "timed_out": False,
             "timeout_info": None,
             "poll_interval_hint": 5,
@@ -119,11 +123,21 @@ def get_worker_questions(job_id: str, *, runner: LocalRunner) -> dict[str, Any]:
         for n in sorted(questions_by_round)
     ]
 
-    pending_round = next((r["round"] for r in rounds if not r["answered"]), None)
+    # An empty round (questions == []) is the agent's explicit "I have no
+    # questions, proceeding now" marker — it is NOT a pending round and must
+    # never be treated as something to answer.
+    pending_round = next(
+        (r["round"] for r in rounds if not r["answered"] and r["questions"]),
+        None,
+    )
+    no_questions = bool(rounds) and not any(r["questions"] for r in rounds)
     return {
         "job_id": job_id,
         "rounds": rounds,
         "pending_round": pending_round,
+        # True when the agent signalled it will not ask anything and is
+        # working — stop polling for questions on this job.
+        "no_questions": no_questions,
         "timed_out": timed_out,
         "timeout_info": timeout_info,
         # Hint: if pending_round is set, call answer_worker_questions immediately.
@@ -132,6 +146,69 @@ def get_worker_questions(job_id: str, *, runner: LocalRunner) -> dict[str, Any]:
         "elapsed_seconds": elapsed_seconds,
         "started_at": started_at_iso,
     }
+
+
+# ---------------------------------------------------------------------------
+# await_worker_questions
+# ---------------------------------------------------------------------------
+
+
+def await_worker_questions(
+    job_id: str,
+    *,
+    runner: LocalRunner,
+    max_wait: float = 600.0,
+    poll_interval: float = 3.0,
+) -> dict[str, Any]:
+    """Block until a clarify-phase job needs attention, then return once.
+
+    This replaces orchestrator-side polling for the Q&A protocol.  Make a
+    single call after delegating with ``clarify_rounds > 0``; the server
+    watches the job locally (the remote→local sync thread already mirrors
+    questions every ~3 s) and returns as soon as **the first** of these
+    happens:
+
+    - ``outcome="questions"`` — the agent wrote a non-empty round that has no
+      answers yet.  Call ``answer_worker_questions`` next.  ``pending_round``
+      and ``rounds`` carry the questions.
+    - ``outcome="no_questions"`` — the agent wrote an empty ``[]`` round: it
+      has nothing to ask and is now working.  Do not poll again.
+    - ``outcome="job_finished"`` — the job reached a terminal state without a
+      pending round (it never asked, or finished).  ``status`` carries the
+      final job status.
+    - ``outcome="timed_out"`` — the agent wrote ``timeout.json`` (it gave up
+      waiting for answers).  Use ``resume_agent_task`` to recover.
+    - ``outcome="wait_expired"`` — ``max_wait`` elapsed and the agent is still
+      exploring (no questions yet).  Call again to keep waiting; this costs
+      one MCP round-trip, not a polling loop.
+
+    Because waiting happens server-side, a slow worker that takes 200-600 s to
+    write its first questions costs the orchestrator a single tool call, not
+    dozens.  ``max_wait`` only bounds one call — re-invoking continues waiting.
+    """
+    deadline = time.monotonic() + max_wait
+    while True:
+        info = get_worker_questions(job_id, runner=runner)
+
+        if info["pending_round"] is not None:
+            return {"outcome": "questions", **info}
+        if info["timed_out"]:
+            return {"outcome": "timed_out", **info}
+        if info["no_questions"]:
+            return {"outcome": "no_questions", **info}
+
+        job_result = runner._store.read_result(job_id)
+        if job_result is not None and job_result.status in _TERMINAL_STATUSES:
+            return {
+                "outcome": "job_finished",
+                "status": job_result.status,
+                **info,
+            }
+
+        if time.monotonic() >= deadline:
+            return {"outcome": "wait_expired", **info}
+
+        time.sleep(poll_interval)
 
 
 # ---------------------------------------------------------------------------

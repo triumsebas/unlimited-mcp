@@ -83,7 +83,7 @@ class ClarifyConfig(_Strict):
     """
 
     max_rounds: int = 5
-    max_total_seconds: int = 300
+    max_total_seconds: int = 600
 
 
 # ---------------------------------------------------------------------------

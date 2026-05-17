@@ -205,6 +205,11 @@ class AgentRunner:
                     max_rounds=effective_rounds,
                     max_total_seconds=clarify_cfg.max_total_seconds,
                 )
+                # The clarify phase (repo scan + writing questions + waiting
+                # for answers) runs *before* any real work and would otherwise
+                # eat into the job's work budget. Extend the timeout so the
+                # answer-wait window is additive, not subtractive.
+                timeout_seconds += clarify_cfg.max_total_seconds
 
         # ---- render argv (uses effective_cwd for {cwd} token) ----------------
         render = agent.render_argv(
@@ -294,10 +299,17 @@ def _build_clarify_prompt(
     poll_interval = 3
     return f"""## Pre-task clarification protocol
 
-Before writing any code or making any decisions, gather all the information you need by asking questions via files.
+This is the VERY FIRST thing you do — before reading more than the minimum
+code needed to know what to ask, before any planning, before any edits.
+Resolve ambiguity through files, not assumptions.
 
 **Rules:**
 - Write ALL your questions for a round at once in a single file — do not ask one at a time.
+- Decide what to ask quickly. Do not deep-dive the whole repo before round 001;
+  a short scan to identify the real ambiguities is enough.
+- If you have NO questions (the task is unambiguous), you MUST still write
+  `round_001_questions.json` with an empty array `[]` and then proceed
+  immediately. This is the signal that you will not ask — never skip it.
 - Only use a second round if the first answers revealed something genuinely unexpected.
 - Do not assume. Do not invent answers.
 - If you receive an answer containing "STOP", proceed immediately with what you know.
@@ -309,6 +321,8 @@ Before writing any code or making any decisions, gather all the information you 
 Step 1 — write your questions to:
   {questions_dir}/round_NNN_questions.json
   Format: [{{"id": 1, "question": "...", "options": ["A: ...", "B: ..."], "why": "one line on why this changes the implementation"}}, ...]
+  If you have no questions, write exactly: []
+  When the file is `[]`, skip steps 2-3 and start the task now.
 
 Step 2 — poll every {poll_interval}s for answers at:
   {questions_dir}/round_NNN_answers.json
