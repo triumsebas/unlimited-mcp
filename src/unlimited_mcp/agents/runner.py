@@ -42,6 +42,7 @@ import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
+from string import Template
 from typing import Any
 
 from unlimited_mcp.agents.base import CLIAgent
@@ -284,6 +285,9 @@ class AgentRunner:
 # ---------------------------------------------------------------------------
 
 
+_CLARIFY_PROMPT_TEMPLATE = Path(__file__).with_name("clarify_prompt.md")
+
+
 def _build_clarify_prompt(
     original_prompt: str,
     questions_dir: str | Path,
@@ -292,52 +296,23 @@ def _build_clarify_prompt(
 ) -> str:
     """Prepend the file-based Q&A clarification protocol to the original prompt.
 
+    The protocol text lives in ``clarify_prompt.md`` next to this module so it
+    can be edited without touching code.  It is a ``string.Template`` (``$``
+    placeholders, not ``str.format``) because the prompt contains literal JSON
+    braces.  Substituted placeholders: ``$questions_dir``, ``$max_rounds``,
+    ``$max_total_seconds``, ``$original_prompt``.
+
     The agent writes all questions for a round to a single JSON array file,
     waits for an answers file, then proceeds.  If the total wait exceeds
     *max_total_seconds* the agent must write a timeout marker and exit 2.
     """
-    poll_interval = 3
-    return f"""## Pre-task clarification protocol
-
-This is the VERY FIRST thing you do — before reading more than the minimum
-code needed to know what to ask, before any planning, before any edits.
-Resolve ambiguity through files, not assumptions.
-
-**Rules:**
-- Write ALL your questions for a round at once in a single file — do not ask one at a time.
-- Decide what to ask quickly. Do not deep-dive the whole repo before round 001;
-  a short scan to identify the real ambiguities is enough.
-- If you have NO questions (the task is unambiguous), you MUST still write
-  `round_001_questions.json` with an empty array `[]` and then proceed
-  immediately. This is the signal that you will not ask — never skip it.
-- Only use a second round if the first answers revealed something genuinely unexpected.
-- Do not assume. Do not invent answers.
-- If you receive an answer containing "STOP", proceed immediately with what you know.
-- Only ask what would actually change your implementation.
-- Maximum {max_rounds} rounds. Total wait budget: {max_total_seconds}s.
-
-**Protocol for round N (format N as a zero-padded 3-digit number: 001, 002, ...):**
-
-Step 1 — write your questions to:
-  {questions_dir}/round_NNN_questions.json
-  Format: [{{"id": 1, "question": "...", "options": ["A: ...", "B: ..."], "why": "one line on why this changes the implementation"}}, ...]
-  If you have no questions, write exactly: []
-  When the file is `[]`, skip steps 2-3 and start the task now.
-
-Step 2 — poll every {poll_interval}s for answers at:
-  {questions_dir}/round_NNN_answers.json
-  Print "round N: waiting for answers..." each iteration.
-  If the file does not appear within your remaining time budget, write:
-  {questions_dir}/timeout.json  ← {{"last_round": N, "unanswered_questions": [...]}}
-  Then exit with code 2.
-
-Step 3 — read the answers. If you need a follow-up round (and rounds remain), write round N+1. Otherwise proceed with the task.
-
----
-
-## Your task
-
-{original_prompt}"""
+    template = Template(_CLARIFY_PROMPT_TEMPLATE.read_text(encoding="utf-8"))
+    return template.safe_substitute(
+        questions_dir=str(questions_dir),
+        max_rounds=max_rounds,
+        max_total_seconds=max_total_seconds,
+        original_prompt=original_prompt,
+    ).rstrip("\n")
 
 
 def _decision_to_blocked_result(
