@@ -173,6 +173,81 @@ Step 3 — apply the multiplier:
 
 ---
 
+## clarify_rounds — Q&A before the worker starts
+
+Pass `clarify_rounds=N` to `delegate_to_agent` to let the agent ask questions
+before writing any code.  The Q&A protocol is injected automatically — just
+pass the number.
+
+```python
+result = delegate_to_agent(
+    agent_name='opencode_pro',
+    prompt='Add a notification system to the platform',
+    clarify_rounds=2,       # 0 = no Q&A (default); 1-5 = up to N rounds
+    cwd='/path/to/repo',
+    workspace='safe_dev',
+)
+```
+
+After any `clarify_rounds >= 1` delegation, make **one** blocking call:
+
+```python
+res = await_worker_questions(result['job_id'])
+```
+
+Act on `res['outcome']`:
+
+| outcome | meaning | next action |
+|---|---|---|
+| `"questions"` | agent asked; `pending_round`/`rounds` carry them | `answer_worker_questions(job_id, round, answers)` |
+| `"no_questions"` | agent wrote `[]` — nothing to ask, working | do nothing, wait for job |
+| `"job_finished"` | finished without asking | review as normal |
+| `"timed_out"` | agent gave up waiting for answers | `resume_agent_task` |
+| `"wait_expired"` | still exploring; `max_wait` elapsed | call `await_worker_questions` again |
+
+**Do NOT poll `get_worker_questions` in a loop.** `await_worker_questions` blocks
+server-side and returns once, regardless of how long the worker takes to explore.
+
+**When to use `clarify_rounds`:**
+
+- Use `clarify_rounds >= 1` for design/planning tasks or long tasks where wrong
+  assumptions are costly.
+- Use `clarify_rounds=0` (default) for mechanical tasks with fully-specified
+  prompts naming exact files, functions, or acceptance criteria.
+- `timeout_seconds` is auto-extended by `clarify.max_total_seconds` (600 s)
+  when `clarify_rounds > 0` — do not add it manually.
+
+---
+
+## Grouping sub-tasks in one delegation
+
+Each delegation is a fresh session — the worker re-explores the repo from
+scratch.  Bundling amortises that cost, but only when sub-tasks share context.
+Decision checklist (in priority order):
+
+1. Same files or module → bundle.
+2. Sequential dependency (B needs A's output) → bundle and number them.
+3. Same conceptual domain (all "logging", all "auth") → bundle.
+4. None of the above → separate delegations, run in parallel.
+
+Cap at ~3-4 sub-tasks; the combined diff must be reviewable in one sitting.
+Never bundle by convenience — a timeout or wrong assumption kills the whole lot.
+
+---
+
+## Local-GPU agents (`speed_tier` slow/unusable)
+
+Applies **only** to agents whose model runs on a local GPU (user's choice —
+privacy or cost).  Not to be confused with agents named "local" that proxy to
+a remote cloud API.
+
+- Always `clarify_rounds=0`.  Resolve ambiguity in the prompt yourself.
+- Name exact files or directories the agent must read; do not let it scan the
+  whole repo.
+- Write an explicit acceptance criterion so the agent stops at the right point.
+
+---
+
 ## Before any task checklist
 
 1. `list_capabilities()` — confirm the target agent is configured.
@@ -196,11 +271,9 @@ result = delegate_to_agent(
     queue='ts',
 )
 
-# 3. Poll until done (or call get_job_result in a follow-up session)
-while True:
-    r = get_job_result(result['job_id'])
-    if r['status'] != 'running':
-        break
+# 3. Wait until done — prefer await_job (single blocking call) over polling
+r = await_job(result['job_id'])
+# or if you need manual control: poll get_job_result(job_id) until status != 'running'
 
 # 4. Inspect
 # r['branch']      — worktree branch with changes
@@ -270,6 +343,7 @@ If the agent hangs waiting for a permission prompt, add `--yolo` /
   in a follow-up session.
 - **Sandbox mode**: if Codex runs in `workspace-write` sandbox, MCP can only
   write inside that sandbox. Set `allowed_roots` narrowly to match.
-- **Worker questions** require polling within the same session; in `exec` mode
-  this only works if the job finishes before the session times out.
+- **Worker questions**: use `await_worker_questions(job_id)` — one blocking
+  call, not a polling loop.  In `exec` mode this only works if the job
+  resolves (questions appear or job finishes) before the session times out.
 - Codex reads `AGENTS.md` natively; this file is the entry point.
