@@ -168,6 +168,7 @@ class AgentRunner:
         warnings: list[JobWarning] = []
         pre_job_id: str | None = None
         _remote_q_dir: str | None = None
+        _original_prompt: str = prompt or ""
 
         if clarify_rounds > 0:
             # Detect runner type for Q&A routing.
@@ -262,6 +263,12 @@ class AgentRunner:
             job_id=pre_job_id,
             **extra_kw,
         )
+        # Patch original_prompt into meta so resume_agent_task can reconstruct
+        # the pre-clarify prompt even when the job ran on a remote host.
+        if _original_prompt:
+            meta = self._local_runner._store.read_meta(result.job_id) or {}
+            meta["original_prompt"] = _original_prompt
+            self._local_runner._store.write_meta(result.job_id, meta)
         if warnings:
             result = result.model_copy(update={"warnings": result.warnings + warnings})
         return result

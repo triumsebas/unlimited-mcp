@@ -61,6 +61,7 @@ _PHASE_1_TOOLS = {
     # job management
     "get_job_status",
     "get_job_result",
+    "await_job",
     "list_jobs",
     "cancel_job",
     "cleanup_jobs",

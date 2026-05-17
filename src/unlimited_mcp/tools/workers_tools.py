@@ -60,7 +60,18 @@ def get_worker_questions(job_id: str, *, runner: LocalRunner) -> dict[str, Any]:
     not written its questions yet.  Wait ``poll_interval_hint`` seconds before
     calling again — the agent syncs files every ~3 s, so polling faster than
     that wastes tokens without gaining information.
+
+    ``elapsed_seconds`` and ``started_at`` reflect wall-clock time since the
+    job started — use these to ground time estimates rather than counting polls.
     """
+    job_result = runner._store.read_result(job_id)
+    now = datetime.now(UTC)
+    elapsed_seconds: float | None = None
+    started_at_iso: str | None = None
+    if job_result is not None and job_result.started_at is not None:
+        elapsed_seconds = round((now - job_result.started_at).total_seconds(), 1)
+        started_at_iso = job_result.started_at.isoformat()
+
     q_dir = runner._store.questions_dir(job_id)
     if not q_dir.exists():
         return {
@@ -70,6 +81,8 @@ def get_worker_questions(job_id: str, *, runner: LocalRunner) -> dict[str, Any]:
             "timed_out": False,
             "timeout_info": None,
             "poll_interval_hint": 5,
+            "elapsed_seconds": elapsed_seconds,
+            "started_at": started_at_iso,
         }
 
     answered: set[int] = set()
@@ -116,6 +129,8 @@ def get_worker_questions(job_id: str, *, runner: LocalRunner) -> dict[str, Any]:
         # Hint: if pending_round is set, call answer_worker_questions immediately.
         # If null and job is still running, wait this many seconds before re-polling.
         "poll_interval_hint": 0 if pending_round else 5,
+        "elapsed_seconds": elapsed_seconds,
+        "started_at": started_at_iso,
     }
 
 
