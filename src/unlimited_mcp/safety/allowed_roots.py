@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Allowed-roots and deny-paths checks for argv invocations.
 
 Path detection has three layers, in order of precision:

@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Worker clarification tools: get_worker_questions, answer_worker_questions,
 resume_agent_task.
 

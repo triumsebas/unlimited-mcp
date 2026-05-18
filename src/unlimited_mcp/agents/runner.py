@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """AgentRunner: glue between :class:`CLIAgent`, the safety pipeline,
 :class:`~unlimited_mcp.workspace.manager.WorkspaceManager`, and
 :class:`~unlimited_mcp.jobs.runner_local.LocalRunner`.

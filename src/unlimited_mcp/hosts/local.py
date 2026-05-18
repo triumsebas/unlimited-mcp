@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Local subprocess backend for the ``Host`` protocol.
 
 Executes commands in-process via :mod:`subprocess`, applying secret

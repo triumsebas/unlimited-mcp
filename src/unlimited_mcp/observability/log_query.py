@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """query_logs implementation: filter JSONL log files without exposing raw paths.
 
 Reads ``logs/server.jsonl`` (operational) and ``audit/errors.jsonl`` (errors),

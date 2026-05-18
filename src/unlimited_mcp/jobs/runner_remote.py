@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """RemoteRunner: runs a Host.run() call in a background thread.
 
 Unlike :class:`~unlimited_mcp.jobs.runner_local.LocalRunner` (which spawns

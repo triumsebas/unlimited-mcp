@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """KnowledgeStore: merge of repo ``knowledge.yaml`` with user ``knowledge.local.yaml``.
 
 The repo file is the shared catalog (committed, English, verified). The

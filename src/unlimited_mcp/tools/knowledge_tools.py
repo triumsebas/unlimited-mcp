@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Knowledge lookup and registration tool functions.
 
 lookup_agent_cli   — query the merged catalog for a CLI entry

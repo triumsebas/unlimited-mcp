@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """XDG-compliant paths for unlimited-mcp config and runtime state.
 
 User configuration lives under ``$XDG_CONFIG_HOME/unlimited-mcp/`` (defaults

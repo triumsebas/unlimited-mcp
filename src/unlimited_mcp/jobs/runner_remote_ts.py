@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """RemoteTsRunner: submits jobs to task-spooler on a remote SSH host.
 
 Unlike :class:`~unlimited_mcp.jobs.runner_remote.RemoteRunner` (which blocks

@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Secret-redaction filter applied to argv tails, stdout/stderr, log fields.
 
 Pattern: replace any occurrence of the runtime *value* of an env var that

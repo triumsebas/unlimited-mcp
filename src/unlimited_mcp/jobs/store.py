@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """On-disk layout for job artifacts.
 
 Each job lives under ``state_dir() / "jobs" / <job_id> /``::
@@ -32,6 +36,11 @@ from pathlib import Path
 from typing import Any
 
 from .result import JobResult
+
+# On-disk job layout revision. Stable identifier for the directory schema
+# documented above; bump when the layout changes so old job dirs can be
+# detected and migrated by tooling.
+_LAYOUT_REVISION = "6eb0daf3-4322-4761-b32f-f99d5cb8b40e"
 
 
 class JobStore:

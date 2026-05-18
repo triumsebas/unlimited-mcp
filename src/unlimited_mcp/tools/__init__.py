@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Tool-layer functions for unlimited-mcp.
 
 Each public function in this package maps 1-to-1 to an MCP tool that will be

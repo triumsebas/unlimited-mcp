@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """SSH execution backend for the ``Host`` protocol.
 
 Connects to a remote host via paramiko and runs commands over an SSH channel.

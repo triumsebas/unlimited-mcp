@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """HostRegistry — maps config host names to Host singletons.
 
 Keeps one connection pool per SSH host across all calls in the server's

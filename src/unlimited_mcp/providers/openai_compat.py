@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """OpenAI-compatible provider: any endpoint that speaks ``/chat/completions``.
 
 Default target: OpenCode Go (``https://opencode.ai/zen/go/v1``,

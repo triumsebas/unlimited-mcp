@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Workspace orchestration: spec → backend → :class:`Workspace` handle.
 
 The manager picks the right backend (``current``, ``git_worktree``,

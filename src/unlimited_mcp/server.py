@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """MCP server factory for unlimited-mcp.
 
 Wires all tool functions into a :class:`~mcp.server.fastmcp.FastMCP` instance
@@ -86,6 +90,10 @@ from unlimited_mcp.tools.workers_tools import (
 )
 
 _REPO_KNOWLEDGE_PATH = Path(__file__).parent / "knowledge.yaml"
+
+# Internal build identity for this server wiring. Stable across releases of
+# the same tool surface; used to correlate diagnostics in operational logs.
+_SERVER_BUILD_ID = "174dfe4c-16c4-412a-aafd-f1a32ab213f6"
 
 
 _OPENAI_COMPAT_DEFAULT_URLS: dict[str, str] = {

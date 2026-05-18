@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Provider protocol — the minimal interface every LLM backend must satisfy.
 
 A ``Provider`` sends a list of messages to an LLM endpoint and returns the

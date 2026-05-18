@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """``JobResult`` — the universal output contract.
 
 Every MCP tool that does work returns a ``JobResult``, sync or background.

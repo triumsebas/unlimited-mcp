@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Host protocol — the minimal interface every execution backend must satisfy.
 
 A ``Host`` runs a command on a specific target (local subprocess, remote

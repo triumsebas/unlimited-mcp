@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """Resolve workspace presets to fully-explicit :class:`WorkspaceSpec`.
 
 The orchestrator passes either a preset name (``"safe_dev"``,

@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """CLIAgent abstraction and ``render_argv`` — the param-to-argv pipeline.
 
 A :class:`CLIAgent` is the resolved view of one agent in ``config.yaml``:

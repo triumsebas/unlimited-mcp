@@ -1,3 +1,7 @@
+# Copyright 2026 Sebastian Fernandez Alberdi
+# SPDX-License-Identifier: Apache-2.0
+# Part of unlimited-mcp — https://github.com/triumsebas/unlimited-mcp
+
 """MCP tool functions: run_command, run_shell, delegate_to_agent, run_and_summarize.
 
 These are pure Python functions — no MCP SDK import, no global state.
