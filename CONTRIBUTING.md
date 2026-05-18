@@ -17,6 +17,29 @@ cd unlimited-mcp
 uv sync --all-extras
 ```
 
+### Hot-reload development (dogfooding)
+
+`uv sync` installs the package **editable** into the repo's venv, so the
+running server *is* the source you're editing. Point your MCP client at the
+repo checkout instead of a global install:
+
+```json
+{
+  "mcpServers": {
+    "unlimited-mcp": {
+      "command": "uv",
+      "args": ["run", "--directory", "/path/to/unlimited-mcp", "unlimited-mcp"]
+    }
+  }
+}
+```
+
+Now you can use the MCP and fix its code in the same session: edit a file,
+then call the `restart_server` tool (or `install_and_restart` if you changed
+dependencies) and the orchestrator reconnects to the patched server without
+leaving the conversation. This is how the project is developed — bugs found
+mid-task are fixed and reloaded in place.
+
 Run tests:
 
 ```bash

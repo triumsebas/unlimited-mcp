@@ -1,21 +1,54 @@
-# Example prompts & delegation flows
+# Example prompts
 
-Copy-paste prompts and orchestration patterns for use with `unlimited-mcp`.
-You talk to your **orchestrator** (Claude Code, Codex); it drives the
-**workers** (the delegated agents). See the [README](README.md) for setup.
+Copy-paste prompts for use with `unlimited-mcp`. You talk to your
+**orchestrator** (Claude Code, Codex); it drives the **workers** (the
+delegated agents). See the [README](README.md) for setup.
 
-> More battle-tested prompts will be added over time. Contributions welcome —
-> open a PR adding your prompt with a one-line note on what it's good for.
+> Contributions welcome — open a PR adding your prompt with a one-line note
+> on what it's good for.
 
 ---
 
-## Tested prompts
+## Simple examples
+
+Plain-language prompts you can type as-is. They don't name any specific model
+or agent — the orchestrator picks from whatever you've configured.
+
+**Delegate a contained coding change:**
+
+```
+Use unlimited-mcp to delegate this to a cheap coding agent: add type hints and
+docstrings to every public function in src/utils/, then run the tests. Work in
+an isolated branch and show me the diff — don't touch anything outside that
+folder.
+```
+
+**Long job in the background, keep working:**
+
+```
+Kick off a background job through unlimited-mcp that runs the full test suite
+with coverage and summarizes the failures. Don't block on it — I'll keep
+working; let me know when it finishes.
+```
+
+**Read-only analysis, no changes:**
+
+```
+Have a cheap worker do a read-only pass over this repo: list every TODO/FIXME
+and any obviously dead code, grouped by file, as a prioritized list. It must
+not modify anything.
+```
+
+---
+
+## Tested generator prompts
 
 These are **generator prompts**: you paste them into a frontier orchestrator
 (Claude Code / Codex) and it produces the actual per-session orchestration
 prompt. They delegate *all* delegation mechanics to the `unlimited-mcp` skill
 as the single source of truth, and only encode the project-specific role map
-and workflow.
+and workflow. They are deliberately tied to specific agents/models because
+that is part of what was validated.
 
 ### End-to-end remote build (fully delegated, unattended)
 
@@ -66,7 +99,7 @@ Generate an orchestration prompt for a new session that runs a serious security 
 
 Hard rule for the generated prompt: it must delegate ALL delegation mechanics to the `unlimited-mcp` skill as the single source of truth (Q&A protocol, timeouts, queues, SSH handling, "never code/fix/review by hand"). Do NOT re-encode the mechanics in the prompt — only encode the role map and workflow below.
 
-Safety rule (must appear in the generated prompt): the audit is READ-ONLY. Workers may only run non-mutating inspection commands. They must NEVER apply updates, change configuration, kill processes, or remediate anything. All remediation is written up as recommendations for the human to review and approve out of band.
+ABSOLUTE SAFETY RULE (must appear verbatim and first in the generated prompt): No agent may change the state of ANY target machine in any way. Connect, read, extract, disconnect — nothing else. No writes, no installs, no updates, no config changes, no service restarts, no killing processes, no creating or deleting files, no remediation. Only non-mutating, read-only inspection commands are permitted. Every finding that needs action is written up as a recommendation for a human to review and apply out of band.
 
 Role map:
 - Sonnet = orchestrator + consolidator of the final report (never runs remote commands itself)
@@ -91,59 +124,3 @@ Workflow the generated prompt must specify:
 
 The generated prompt must be generic (no real hostnames or site detail), concise, and readable as documentation of this audit pattern.
 ```
-
----
-
-## Pattern: AI-assisted software development
-
-The delegation pattern that motivated this project. You define the strategy in
-plain language; the orchestrator executes it.
-
-**Design phase** (expensive model — do it once, do it right):
-```
-Claude Opus: Review requirements, design architecture, write detailed plan
-```
-
-**Implementation phase** (cheap model — runs for hours, burns no subscription):
-```
-Sonnet orchestrates → opencode(DeepSeek Flash) implements feature by feature
-                    → opencode(DeepSeek Pro)  reviews critical sections
-                    → delegate_to_agent() for each task, get_job_result() to verify
-```
-
-**Review phase** (expensive model — spot checks, final approval):
-```
-Claude Opus/Sonnet: Review diffs, merge approved branches, tag release
-```
-
-You decide which agent handles what, which model reviews, and when the
-expensive orchestrator steps back in. Each task runs in an isolated git
-worktree, so your main branch is untouched until you approve and merge.
-
-Common things to offload: boilerplate, tests and docstrings; refactors with
-clear acceptance criteria; lint/type fixes across large codebases; database
-migrations; patch review.
-
----
-
-## Pattern: systems operations
-
-Automate infrastructure tasks that require many calls or long runtimes:
-
-```python
-# Audit multiple servers (Phase 3: SSH)
-for server in server_list:
-    submit_task(
-        agent_name='sysops_agent',
-        prompt=f'Audit {server}: check disk, running services, failed systemd units',
-        queue='ts'  # background, survives session close
-    )
-
-# Parallel updates
-submit_task(argv=['apt-get', 'update', '-y'], cwd='/mnt/server1', queue='ts')
-submit_task(argv=['apt-get', 'update', '-y'], cwd='/mnt/server2', queue='ts')
-```
-
-Good for: auditing many servers for compliance/security, rolling out config
-changes across a fleet, long batch jobs (data processing, ML pipelines), or
-any automation that would block your terminal for minutes or hours.

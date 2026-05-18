@@ -114,7 +114,7 @@ Any CLI agent can be added without restarting the server. The server ships with 
 | Without it | With it |
 |---|---|
 | Claude hits the 5h limit mid-task | Long tasks run in background agents, Claude stays free |
-| You pay frontier prices for every line of code | Design with Opus, delegate execution to Flash — you set the strategy |
+| You pay frontier prices for every line of code | Design with Opus, delegate execution to a cheaper/free LLM — you set the strategy |
 | Closing Claude cancels in-progress work | Background jobs keep running after you close your session |
 | Adding a new agent means editing config files | Tell Claude "add opencode with DeepSeek Flash" — done |
 | Local GPU sits idle while paying for API | Ollama/MLX/LM Studio agents work out of the box |
@@ -319,15 +319,15 @@ Any MCP-compatible orchestrator should work with no or minor changes. If you tes
 - `query_logs` for operational observability
 - Local inference: Ollama, MLX, LM Studio (any OpenAI-compatible endpoint)
 
-### ✅ Phase 3 — Remote execution (in progress)
+### ✅ Phase 3 — Remote execution
 - **SSH backend** — delegate tasks to remote machines; run commands, agents, and prompt-via-file over SSH.
   Authentication: macOS Keychain (tested ✓) · ssh-agent (tested ✓) · Linux keyring (pending).
   In **Claude Desktop**, the server has no SSH agent socket — use Keychain. In **Claude Code (terminal)**, both ssh-agent and Keychain work.
   See [SSH.md](SSH.md) for setup.
 - **Remote GPU clusters** — submit jobs to remote Ollama/MLX/LM Studio servers
-- **Anthropic direct provider** — query Claude models directly as a provider for summarization, analysis, and review tasks without going through an agent CLI
 
 ### 🔜 Phase 4 — Notifications & observability
+- **Anthropic direct provider** — query Claude models directly as a provider for summarization, analysis, and review tasks without going through an agent CLI
 - **Webhook / instant messaging notifications** — get notified when long background jobs complete
 - **Web dashboard** — monitor active and completed jobs visually
 
