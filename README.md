@@ -386,7 +386,6 @@ Built by **Sebastián Fernández** · CEO at [Trium Sistemas Informáticos SL](h
 A systems engineer who dove deep into AI tooling — and built the infrastructure he wished existed.
 
 [![GitHub](https://img.shields.io/badge/GitHub-triumsebas-181717?logo=github)](https://github.com/triumsebas)
-[![LinkedIn](https://img.shields.io/badge/LinkedIn-Connect-0A66C2?logo=linkedin)](https://linkedin.com/in/YOUR_LINKEDIN_HANDLE)
 
 ---
 
