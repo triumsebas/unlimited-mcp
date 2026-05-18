@@ -17,6 +17,24 @@ cd unlimited-mcp
 uv sync --all-extras
 ```
 
+### Symlink the delegate skill (avoid two copies)
+
+If you use Claude Code with the `unlimited-mcp` skill installed **and** you are also developing the server in this repo, your installed skill (`~/.claude/skills/delegate/SKILL.md`) and the repo copy (`skills/delegate/SKILL.md`) will drift apart unless you keep them in sync.
+
+The simplest fix is a symlink so there is only one file:
+
+```bash
+# Run once after cloning; replace the path with your actual clone location
+ln -sf /path/to/unlimited-mcp/skills/delegate/SKILL.md \
+       ~/.claude/skills/delegate/SKILL.md
+```
+
+After this, every edit to `skills/delegate/SKILL.md` is immediately live in your Claude Code session — no copy step needed.
+
+> **Note for Codex users:** Codex reads `AGENTS.md` from the repo root, which is already the canonical reference. No symlink is needed.
+
+---
+
 ### Hot-reload development (dogfooding)
 
 `uv sync` installs the package **editable** into the repo's venv, so the
