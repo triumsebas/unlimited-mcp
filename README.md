@@ -127,14 +127,20 @@ Any CLI agent can be added without restarting the server. The server ships with 
 ### 1. Install
 
 ```bash
-# From GitHub (until first PyPI release)
-pip install git+https://github.com/triumsebas/unlimited-mcp.git
+# From PyPI (recommended)
+pip install unlimited-mcp
+# …or, isolated, with uv:
+uv tool install unlimited-mcp        # then run:  uvx unlimited-mcp
 
-# Or with uv (recommended)
-uv tool install git+https://github.com/triumsebas/unlimited-mcp.git
+# Or straight from GitHub (latest, unreleased)
+pip install git+https://github.com/triumsebas/unlimited-mcp.git
 ```
 
 **Prerequisites**: Python 3.11+. For background jobs: [`ts` (task-spooler)](https://viric.name/soft/ts/) on your PATH.
+
+> **Get everything, not just the server.** Installing the package gives you the MCP server only — the opinionated `/delegate` skill and the orchestrator companion guides live in the repo. To pull them in, just ask your AI:
+> - **Claude Code:** *"add the `/delegate` skill from `https://github.com/triumsebas/unlimited-mcp/tree/main/skills/delegate`"* (or, if you cloned the repo, give it the local path to `skills/delegate/`).
+> - **Codex / other orchestrators:** *"add this project's [AGENTS.md](https://github.com/triumsebas/unlimited-mcp/blob/main/AGENTS.md) to my config"* so it has the full delegation reference.
 
 ### 2. Add to your MCP client
 

@@ -1,0 +1,51 @@
+# Publish to PyPI on a version tag.
+#
+# Uses PyPI Trusted Publishing (OIDC) — no API token stored as a secret.
+# ONE-TIME SETUP on PyPI (https://pypi.org/manage/account/publishing/):
+#   - PyPI project name: unlimited-mcp
+#   - Owner:            triumsebas
+#   - Repository:       unlimited-mcp
+#   - Workflow name:    publish.yml
+#   - Environment:      pypi
+# (Create the project's first release manually with `uv publish` + a token
+#  if the project does not yet exist on PyPI, then trusted publishing works
+#  for every subsequent tag.)
+#
+# To cut a release:
+#   1. Bump `version` in pyproject.toml
+#   2. git tag vX.Y.Z && git push origin vX.Y.Z
+#   The tag push triggers this workflow and publishes that version.
+
+name: Publish to PyPI
+
+on:
+  push:
+    tags:
+      - "v*"
+
+jobs:
+  build-and-publish:
+    runs-on: ubuntu-latest
+    environment: pypi
+    permissions:
+      id-token: write          # required for trusted publishing (OIDC)
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Install uv
+        uses: astral-sh/setup-uv@v5
+        with:
+          python-version: "3.11"
+
+      - name: Verify tag matches package version
+        run: |
+          TAG="${GITHUB_REF_NAME#v}"
+          PKG=$(uv run python -c "import tomllib,pathlib; print(tomllib.loads(pathlib.Path('pyproject.toml').read_text())['project']['version'])")
+          echo "tag=$TAG package=$PKG"
+          test "$TAG" = "$PKG" || { echo "::error::tag v$TAG != pyproject version $PKG"; exit 1; }
+
+      - name: Build sdist and wheel
+        run: uv build
+
+      - name: Publish to PyPI
+        uses: pypa/gh-action-pypi-publish@release/v1
