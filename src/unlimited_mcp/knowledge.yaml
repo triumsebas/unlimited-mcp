@@ -99,6 +99,9 @@ clis:
     verified: false
   opencode:
     docs_url: "https://opencode.ai/docs"
+    # OpenCode Go zen endpoint: https://opencode.ai/zen/go/v1 (OpenAI-compat)
+    # exposes deepseek-v4-flash / deepseek-v4-pro. Do not confuse with
+    # https://opencode.ai/zen/v1 which serves a different model set (no deepseek).
     install_hint: "npm install -g opencode-ai  # or: brew install opencode"
     command_template: "opencode run --format json"
     prompt_via: stdin
@@ -139,16 +142,18 @@ clis:
   hermes:
     docs_url: "https://github.com/Josephrp/hermes-agent"
     install_hint: "pip install hermes-agent"
-    # -q is single query (non-interactive); -Q suppresses banner/spinner for programmatic use
-    # --yolo skips tool-call confirmation prompts (equivalent to --dangerously-skip-permissions)
-    command_template: "hermes chat -q {prompt} -Q --yolo"
-    stdin_command_template: "hermes chat -Q --yolo"
+    # -z is the one-shot (non-interactive) flag; --yolo skips tool-call
+    # confirmation prompts. Verified empirically: `hermes -z "prompt"`,
+    # `-m <model>`, `--provider <name>` (there is no `chat` subcommand and
+    # the one-shot flag is -z, not -q). stdin mode is unverified.
+    command_template: "hermes -z {prompt} --yolo"
+    stdin_command_template: "hermes --yolo"
     prompt_via: arg_with_stdin_fallback
     params:
       model:
         type: str
         default: null
-        render: "--model {value}"
+        render: "-m {value}"
       provider:
         type: str
         default: null
@@ -188,6 +193,8 @@ providers:
   ollama:
     type: ollama
     docs_url: "https://ollama.ai/docs"
+    # localhost default; set OLLAMA_API_BASE to point at a remote host,
+    # e.g. OLLAMA_API_BASE=http://192.168.1.x:11434
     default_base_url: "http://localhost:11434/v1"
     well_known_models:
       - llama3.2
@@ -204,6 +211,8 @@ providers:
   gemini:
     type: gemini
     docs_url: "https://ai.google.dev/gemini-api/docs/openai"
+    # 2.5 Flash works on the free tier; 2.5 Pro and 3.x require billing
+    # enabled in Google AI Studio. Free tier has a strict rate limit.
     default_base_url: "https://generativelanguage.googleapis.com/v1beta/openai/"
     well_known_models:
       - gemini-2.5-flash-preview-05-20
@@ -212,6 +221,8 @@ providers:
   groq:
     type: groq
     docs_url: "https://console.groq.com/docs/openai"
+    # Free tier is capped at ~6k TPM — agents with large system prompts
+    # (e.g. jcode ~11k tokens) exceed it and are not viable on free tier.
     default_base_url: "https://api.groq.com/openai/v1"
     well_known_models:
       - llama-3.3-70b-versatile
