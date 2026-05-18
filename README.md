@@ -51,7 +51,7 @@ In the terms people search for: your frontier model (Claude Code, Codex) is the 
                 │ MCP tools
                 ▼
   ┌─────────────────────────┐
-  │    unlimited-mcp         │
+  │    unlimited-mcp        │
   │  ┌───────────────────┐  │
   │  │   Safety Layer    │  │  path allowlists · argv checks · audit log
   │  ├───────────────────┤  │
@@ -140,7 +140,7 @@ pip install git+https://github.com/triumsebas/unlimited-mcp.git
 
 > **Get everything, not just the server.** Installing the package gives you the MCP server only — the opinionated `/delegate` skill and the orchestrator companion guides live in the repo. To pull them in, just ask your AI:
 > - **Claude Code:** *"add the `/delegate` skill from `https://github.com/triumsebas/unlimited-mcp/tree/main/skills/delegate`"* (or, if you cloned the repo, give it the local path to `skills/delegate/`).
-> - **Codex / other orchestrators:** *"add this project's [AGENTS.md](https://github.com/triumsebas/unlimited-mcp/blob/main/AGENTS.md) to my config"* so it has the full delegation reference.
+> - **Codex / other orchestrators:** *"add this project's AGENTS.md from `https://github.com/triumsebas/unlimited-mcp/blob/main/AGENTS.md` to my config"* (or, if you cloned the repo, give it the local path to `AGENTS.md`) so it has the full delegation reference.
 
 ### 2. Add to your MCP client
 
@@ -196,17 +196,17 @@ Open the MCP settings panel in your client and add a new server with command `un
 
 No config files, no manual setup. Connect the MCP and start a conversation:
 
-> **You:** "I just installed opencode Go. Help me register it as a coding agent using DeepSeek Flash — I want something cheap for the heavy lifting."
+> **You:** "I just installed Opencode. Help me register it as a coding agent using DeepSeek Flash with OpenRouter."
 >
 > **Claude:** "I'll set that up. You'll need an API key for the provider — either tell me now or drop it in `~/.config/unlimited-mcp/.env` as `OPENROUTER_API_KEY` if you prefer to keep it out of the conversation."
 >
 > **You:** [key or: "done, I added it to .env"]
 >
-> **Claude:** "Registered `opencode_flash` — opencode Go with DeepSeek Flash via OpenRouter. Which project do you want it to work on?"
+> **Claude:** "Registered `opencode_flash` — Opencode with DeepSeek Flash via OpenRouter. Which project do you want it to work on?"
 >
 > **You:** "/home/user/myproject"
 >
-> **Claude:** "Path allowed. Ready to go — what do you want opencode to work on first?"
+> **Claude:** "Path allowed. Ready to go — what do you want Opencode to work on first?"
 
 That's it. Every agent, provider, path, and safety rule is configured through conversation. Everything is persisted automatically. The creator of this project never manually edited a config file.
 
@@ -371,7 +371,7 @@ care about.
 
 - **Large project users** — if you're working on a big codebase or running heavy automation, your feedback is the most valuable thing right now. Real-world usage exposes what toy examples don't.
 - **New agent CLIs** — if you use a coding agent not in the knowledge base, add it
-- **SSH backend** (Phase 3) — keyring + agent auth shipped and tested on macOS; Linux keyring and Windows are still needed
+- **SSH backend** — keyring + agent auth shipped and tested on macOS; Linux keyring and Windows are still needed
 - **Tests** — the test suite grows with every feature, more coverage always helps
 - **Documentation** — walkthroughs, examples, and troubleshooting guides
 
