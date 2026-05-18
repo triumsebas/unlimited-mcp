@@ -4,6 +4,7 @@
 
 [![Apache-2.0](https://img.shields.io/badge/license-Apache%202.0-blue.svg)](LICENSE)
 [![Python 3.11+](https://img.shields.io/badge/python-3.11%2B-blue)](https://www.python.org/)
+[![PyPI](https://img.shields.io/pypi/v/unlimited-mcp)](https://pypi.org/project/unlimited-mcp/)
 [![MCP](https://img.shields.io/badge/protocol-MCP-purple)](https://modelcontextprotocol.io/)
 [![Status: Alpha](https://img.shields.io/badge/status-alpha-orange)](https://github.com/triumsebas/unlimited-mcp/releases)
 
@@ -11,22 +12,7 @@
 
 [Why](#why-unlimited-mcp) • [Quick start](#quick-start) • [Use cases](#use-cases) • [Architecture](#architecture) • [Roadmap](#roadmap) • [Contributing](#contributing)
 
----
-
-## The problem that built this
-
-Subscriptions burn fast. Claude's 5-hour limit, Codex credits, API costs — anyone doing serious AI-assisted development hits walls constantly.
-
-**This project was built using itself.** Here's what happened:
-
-> Same project, same plan:
->
-> - **Without this tool:** Opus designed, Sonnet implemented — hitting the 5-hour limit repeatedly over several days, and eventually the weekly limit too.
-> - **With this tool:** Sonnet orchestrated opencode Go, delegating the hard work and fixes to DeepSeek V3 Flash (with DeepSeek V3 Pro doing critical reviews). Finished in a single sitting. Not a single 5-hour limit hit. opencode Go never came close to its subscription limit either.
-
-The insight: **you don't need the best model for everything.** You decide what gets delegated, to which agent, running which model — the orchestrator just executes your strategy. Design and supervision stay with the expensive model; everything else goes wherever you point it.
-
-**`unlimited-mcp` is the infrastructure that makes this delegation possible, safe, reproducible, and extremely easy to configure.**
+> **Stop burning your AI limits.** An MCP server that delegates coding and sysops work to any cheaper agent or local LLM via durable background queues — git-worktree isolation, safety policies, and clarification rounds included.
 
 ---
 
@@ -73,6 +59,25 @@ goose
 
 ---
 
+## The problem that built this
+
+Subscriptions burn fast. Claude's 5-hour limit, Codex credits, API costs — anyone doing serious AI-assisted development hits walls constantly.
+
+**This project was built using itself.** Here's what happened:
+
+> Same project, same plan:
+>
+> - **Without this tool:** Opus designed, Sonnet implemented — hitting the 5-hour limit repeatedly over several days, and eventually the weekly limit too.
+> - **With this tool:** Sonnet orchestrated opencode Go, delegating the hard work and fixes to DeepSeek V3 Flash (with DeepSeek V3 Pro doing critical reviews). Finished in a single sitting. Not a single 5-hour limit hit. opencode Go never came close to its subscription limit either.
+
+The insight: **you don't need the best model for everything.** You decide what gets delegated, to which agent, running which model — the orchestrator just executes your strategy. Design and supervision stay with the expensive model; everything else goes wherever you point it.
+
+How much you save isn't a fixed number — it scales with *your* strategy: the more you delegate and the less you need the frontier model to do hands-on, the more limits and cost you reclaim. You set the dial between "Claude does everything" and "Claude only designs and reviews."
+
+**`unlimited-mcp` is the infrastructure that makes this delegation possible, safe, reproducible, and extremely easy to configure.**
+
+---
+
 ## Key features
 
 | Feature | Description |
@@ -83,7 +88,7 @@ goose
 | **Git worktree isolation** | Each coding job runs in its own branch; you review and merge when satisfied |
 | **Self-configuring** | Add agents, providers, and paths by talking to Claude — no config files, no restarts |
 | **Parallel execution** | Multiple agents run concurrently — tell Claude "start phase 2 and parallelize whatever has no dependencies" and it figures out what can run in parallel and what has to wait |
-| **Safety enforcement** | Path allowlists, dangerous command confirmation, shell-injection blocking, audit log |
+| **Server-enforced guardrails** | Path allowlists, dangerous-command confirmation, shell-injection blocking, audit log — enforced by the server, *not* prompt instructions a worker could ignore. A worker physically cannot touch a path outside its allowlist, whatever the prompt says |
 | **Agent clarification rounds** | Agents can ask the orchestrator questions before starting, preventing costly wrong assumptions |
 
 ---
@@ -120,9 +125,22 @@ Any CLI agent can be added without restarting the server. The server ships with 
 | Local GPU sits idle while paying for API | Ollama/MLX/LM Studio agents work out of the box |
 | Infrastructure tasks need separate tooling | Run commands, scripts, and automation on any accessible server |
 
+**vs. other MCP orchestrators**
+
+| Feature | Typical MCP orchestrator | unlimited-mcp |
+|---|---|---|
+| Job durability | Session-scoped — lost on restart | Backed by Task Spooler, survives MCP restarts and session closures |
+| Orchestrator ↔ agent communication | Fire and forget | `clarify_rounds` — agents ask questions before starting; orchestrator answers in real time |
+| Worker isolation | Shared workspace | Git worktree per job — main branch never touched until you merge |
+| Local/remote GPU | Rarely supported | Ollama, MLX, LM Studio — local or over SSH, zero API cost |
+
+> **Not a synchronous Ollama bridge.** Tools like the local-LLM MCP servers hand one task to one local model and block until it answers. `unlimited-mcp` is production-grade async orchestration: durable background queues, multi-agent backends, git-worktree isolation, sysops/devops as well as coding, and SSH remote execution.
+
 ---
 
 ## Quick start
+
+`unlimited-mcp` is available on PyPI — install it with pip or uv, then connect it to any MCP client (Claude Code, Cursor, Codex, Windsurf).
 
 ### 1. Install
 
