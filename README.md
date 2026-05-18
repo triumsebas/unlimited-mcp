@@ -410,3 +410,5 @@ A systems engineer who dove deep into AI tooling — and built the infrastructur
 ## License
 
 Apache 2.0 — see [LICENSE](LICENSE).
+
+<!-- mcp-name: io.github.triumsebas/unlimited-mcp -->
