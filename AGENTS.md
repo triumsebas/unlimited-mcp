@@ -1,7 +1,12 @@
 # unlimited-mcp — orchestrator companion (Codex / generic)
 
-This file is for Codex CLI and generic MCP orchestrators.
-Claude Code users: see CLAUDE.md instead.
+This file is for Codex CLI and generic MCP orchestrators. Codex reads
+`AGENTS.md` natively, so it is kept self-contained.
+
+**This is the single source of truth for orchestration guidance.** `CLAUDE.md`
+imports this file and the `/delegate` skill references it — when the tool
+surface or workflow changes, edit *here*, not in those.
+Claude Code users: see CLAUDE.md for the Claude-specific deltas.
 
 ---
 

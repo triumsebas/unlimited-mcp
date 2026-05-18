@@ -41,6 +41,8 @@ The insight: **you don't need the best model for everything.** You decide what g
 - **Manage git workspaces** — worktrees, commits, and merges are handled automatically
 - **Stay in control** — safety checks, path allowlists, and an audit log keep things safe
 
+In the terms people search for: your frontier model (Claude Code, Codex) is the **architect / orchestrator**; the delegated agents are the **workers / contractors**. The rest of this README uses *orchestrator* and *worker* (or *agent*).
+
 ```
   Claude Code          Codex
   Opus · Sonnet        gpt-5.5
@@ -100,6 +102,8 @@ goose
 | **smolagents** | HuggingFace Python-based agentic execution | ✅ |
 | **gptme** | Terminal-native agent with tool use | ✅ |
 | **pi** | Pi coding agent | ✅ |
+
+> **Note on the `claude` worker:** Claude as a *worker* is best used pointed at other providers. Anthropic subscriptions cap usage per command, so a Claude-Code agent doing the heavy delegated work will hit those limits fast — the whole point of this tool is to keep your Claude *orchestrator* free. Use `claude` as a worker only for occasional high-quality tasks; send the bulk of delegated work to other providers (OpenRouter, local GPU, etc.).
 
 Any CLI agent can be added without restarting the server. The server ships with a knowledge base of common agents; for anything new, just ask Claude to register it.
 
@@ -206,26 +210,11 @@ That's it. Every agent, provider, path, and safety rule is configured through co
 
 ### AI-assisted software development
 
-The pattern that motivated this project:
-
-**Design phase** (expensive model — do it once, do it right):
-```
-Claude Opus: Review requirements, design architecture, write detailed plan
-```
-
-**Implementation phase** (cheap model — runs for hours, burns no subscription):
-```
-Sonnet orchestrates → opencode(DeepSeek Flash) implements feature by feature
-                    → opencode(DeepSeek Pro)  reviews critical sections
-                    → delegate_to_agent() for each task, get_job_result() to verify
-```
-
-**Review phase** (expensive model — spot checks, final approval):
-```
-Claude Opus/Sonnet: Review diffs, merge approved branches, tag release
-```
-
-This is just one example of how to structure the delegation. You decide: which agent handles what, which model reviews, when the expensive orchestrator steps back in. You can define the strategy in plain language and let Claude execute it, or micro-manage each step yourself.
+The pattern that motivated this project: an expensive model designs and
+reviews, a cheap model implements for hours burning no subscription. You
+decide which agent handles what and when the orchestrator steps back in —
+the full Design → Implementation → Review flow is in
+**[PROMPTS.md](PROMPTS.md)**.
 
 Some operations you can offload:
 - Writing boilerplate, tests, and docstrings
@@ -240,21 +229,9 @@ Because each task runs in an isolated git worktree, your main branch is never to
 
 ### Systems operations
 
-Automate infrastructure tasks that require many calls or long runtimes:
-
-```python
-# Audit multiple servers (Phase 3: SSH)
-for server in server_list:
-    submit_task(
-        agent_name='sysops_agent',
-        prompt=f'Audit {server}: check disk, running services, failed systemd units',
-        queue='ts'  # background, survives session close
-    )
-
-# Parallel updates
-submit_task(argv=['apt-get', 'update', '-y'], cwd='/mnt/server1', queue='ts')
-submit_task(argv=['apt-get', 'update', '-y'], cwd='/mnt/server2', queue='ts')
-```
+Automate infrastructure tasks that require many calls or long runtimes —
+audit a fleet, roll out config changes, run long batch jobs in the
+background. Runnable examples are in **[PROMPTS.md](PROMPTS.md)**.
 
 Use cases:
 - Audit many servers for compliance or security issues
@@ -282,64 +259,8 @@ Just tell Claude which backend you're running and on which machine, and it will 
 
 ## Architecture
 
-```
-                   ┌─────────────────────────────────────┐
-                   │         MCP Tool Interface           │
-                   │  delegate_to_agent · run_command     │
-                   │  submit_task · get_job_result        │
-                   │  add_agent · add_provider            │
-                   │  list_capabilities · query_logs      │
-                   └──────────────┬──────────────────────┘
-                                  │
-              ┌───────────────────┼───────────────────┐
-              ▼                   ▼                   ▼
-     ┌────────────────┐  ┌───────────────┐  ┌─────────────────┐
-     │  Agent Runner  │  │  Config Store │  │ Safety Checker  │
-     │  (resolves CLI │  │  (conversatio-│  │ (path allowlist │
-     │  builds argv)  │  │  nally driven)│  │  argv blocking) │
-     └───────┬────────┘  └───────────────┘  └─────────────────┘
-             │
-     ┌───────┴────────┐
-     ▼                ▼
-┌──────────┐   ┌──────────────────────────────────┐
-│  Local   │   │  Task Spooler (ts) backend        │
-│  Runner  │   │  • Durable: survives MCP restart  │
-│  (async) │   │  • Queues: local · ts · ts_serial │
-└────┬─────┘   └──────────────┬───────────────────┘
-     │                        │
-     └──────────┬─────────────┘
-                │
-     ┌──────────┴───────────────────────────────┐
-     ▼                    ▼                     ▼
-┌──────────────┐  ┌───────────────┐   ┌─────────────────────┐
-│  Workspace   │  │  Agent CLIs   │   │  Direct LLM queries │
-│  Manager     │  │  aider        │   │  research · analysis│
-│  git worktree│  │  opencode     │   │  no local exec      │
-│  per job     │  │  claude · pi  │   │  needed             │
-└──────────────┘  │  goose · ...  │   └──────────┬──────────┘
-                  └──────┬────────┘              │
-                         │              ┌─────────┴──────────┐
-                         ▼              ▼                    ▼
-                  ┌─────────────┐  Remote APIs         Local inference
-                  │ System cmds │  OpenAI · Anthropic  Ollama · MLX
-                  │ scripts     │  Groq · OpenRouter   LM Studio
-                  │ automation  │  (any OpenAI-compat) (zero API cost)
-                  └─────────────┘
-```
-
-**JobResult** — every tool returns a structured result:
-
-```json
-{
-  "ok": true,
-  "job_id": "delegate-01J...",
-  "status": "completed",
-  "summary": "Added type hints to 47 functions across 12 files.",
-  "branch": "unlimited-mcp/job-01J...",
-  "diff_ref": "/path/to/changes.patch",
-  "raw_output_ref": "/path/to/stdout.log"
-}
-```
+Component map, the full internal data flow, and the `JobResult` envelope are
+in **[ARCHITECTURE.md](ARCHITECTURE.md)**.
 
 ---
 
@@ -427,11 +348,13 @@ care about.
 | File | What it's for |
 |---|---|
 | [README.md](README.md) | This file — overview, quick start, use cases, roadmap |
+| [ARCHITECTURE.md](ARCHITECTURE.md) | Internal component map, data flow, and the `JobResult` envelope |
+| [PROMPTS.md](PROMPTS.md) | Copy-paste example prompts and delegation flows (dev, sysops) |
 | [SECURITY.md](SECURITY.md) | Threat model — access model, privilege level, what the safety layer does and does not protect |
-| [CLAUDE.md](CLAUDE.md) | Companion guide for **Claude Code** — decision trees, tool reference, delegation patterns |
-| [AGENTS.md](AGENTS.md) | Companion guide for **Codex** and other orchestrators — same content, adapted framing |
-| [CONTRIBUTING.md](CONTRIBUTING.md) | How to add agents, run tests, contribute code |
-| [skills/delegate/SKILL.md](skills/delegate/SKILL.md) | The `/delegate` skill for Claude Code — opinionated wrappers around the MCP tools |
+| [AGENTS.md](AGENTS.md) | **Canonical orchestration reference** — decision trees, queues, timeouts, safety, `clarify_rounds`, agent config. Read natively by Codex; imported by CLAUDE.md |
+| [CLAUDE.md](CLAUDE.md) | Claude Code entry point — imports AGENTS.md and adds only the Claude-Code-specific notes |
+| [CONTRIBUTING.md](CONTRIBUTING.md) | Developer guide — how to add agents, run tests, contribute code |
+| [skills/delegate/SKILL.md](skills/delegate/SKILL.md) | The `/delegate` skill for Claude Code — opinionated delegation patterns; defers to AGENTS.md for the tool reference |
 | [knowledge.yaml](src/unlimited_mcp/knowledge.yaml) | Built-in catalog of agent CLIs and providers — what the server knows before you configure anything |
 
 ---
