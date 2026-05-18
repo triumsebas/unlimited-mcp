@@ -31,8 +31,6 @@ ln -sf /path/to/unlimited-mcp/skills/delegate/SKILL.md \
 
 After this, every edit to `skills/delegate/SKILL.md` is immediately live in your Claude Code session — no copy step needed.
 
-> **Note for Codex users:** Codex reads `AGENTS.md` from the repo root, which is already the canonical reference. No symlink is needed.
-
 ---
 
 ### Hot-reload development (dogfooding)
