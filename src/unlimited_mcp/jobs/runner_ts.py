@@ -119,6 +119,7 @@ class TsRunner:
         cleanup_fn: Callable[[], None] | None = None,
         stdin_content: str | None = None,
         prompt_file_content: str | None = None,
+        job_id: str | None = None,
     ) -> JobResult:
         """Enqueue *argv* in task-spooler and return immediately.
 
@@ -131,7 +132,7 @@ class TsRunner:
         so the worker process finds them on disk without receiving large
         strings on its own command line.
         """
-        job_id = JobStore.make_job_id(tool)
+        job_id = job_id or JobStore.make_job_id(tool)
         started_at = datetime.now(UTC)
         self._store.create(job_id)
         job_dir = self._store.job_dir(job_id)

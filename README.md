@@ -107,6 +107,7 @@ How much you save isn't a fixed number — it scales with *your* strategy: the m
 | **smolagents** | HuggingFace Python-based agentic execution | ✅ |
 | **gptme** | Terminal-native agent with tool use | ✅ |
 | **pi** | Pi coding agent | ✅ |
+| **cline** | Autonomous coding agent with ACP support; configure any OpenAI-compatible provider via `cline auth` | ✅ |
 
 > **Note on the `claude` worker:** Claude as a *worker* is best used pointed at other providers. Anthropic subscriptions cap usage per command, so a Claude-Code agent doing the heavy delegated work will hit those limits fast — the whole point of this tool is to keep your Claude *orchestrator* free. Use `claude` as a worker only for occasional high-quality tasks; send the bulk of delegated work to other providers (OpenRouter, local GPU, etc.).
 
