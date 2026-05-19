@@ -310,6 +310,8 @@ Everything persists automatically across sessions. API keys and secrets are stor
 
 > **Note for developers:** configuration lives at `~/.config/unlimited-mcp/config.yaml` and can be inspected or backed up. But you'll rarely need to open it.
 
+**Customising delegation routing:** the `/delegate` SKILL.md (Claude Code) and AGENTS.md (Codex) are starting points, not fixed rules. You can encode your own routing strategy directly in those files — for example: always send GPU-heavy tasks to a local GPU agent, use a fast cheap model for coding, reserve the strong model for architecture, route sysops work through smolagents with a fallback.
+
 ---
 
 ## Built with Claude · Tested with Claude and Codex
@@ -351,6 +353,7 @@ Any MCP-compatible orchestrator should work with no or minor changes. If you tes
 - **Remote GPU clusters** — submit jobs to remote Ollama/MLX/LM Studio servers
 
 ### 🔜 Phase 4 — Notifications & observability
+- **ACP client backend** *(first priority)* — native [Agent Client Protocol](https://agentclientprotocol.com/) support so any ACP-compatible agent works as a worker without a custom adapter. The [ACP registry](https://github.com/agentclientprotocol/registry) lists 30+ agents already shipping ACP — OpenCode (`opencode acp`), Cline, Gemini CLI, Goose, Kilo, Dirac, and more. Benefits over the current CLI model: streaming progress replaces polling, structured diffs replace raw patch files, and `session/set_mode` maps cleanly to workspace presets.
 - **Anthropic direct provider** — query Claude models directly as a provider for summarization, analysis, and review tasks without going through an agent CLI
 - **Webhook / instant messaging notifications** — get notified when long background jobs complete
 - **Web dashboard** — monitor active and completed jobs visually

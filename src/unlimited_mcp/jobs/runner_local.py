@@ -371,7 +371,13 @@ class LocalRunner:
             last_line = stderr_tail.decode("utf-8", errors="replace").strip().splitlines()
             summary = last_line[-1][:500] if last_line else f"exit_code={exit_code}"
         else:
-            summary = "Completed successfully."
+            _content = b""
+            for _p in (self._store.stdout_path(job_id), self._store.stderr_path(job_id)):
+                if _p.exists():
+                    _content = _p.read_bytes()[-500:]
+                    if _content.strip():
+                        break
+            summary = _content.decode("utf-8", errors="replace").strip()[-500:] or "Completed successfully."
 
         # Don't overwrite a cancel() — check both in-memory flag and persisted status.
         if job_id in self._cancelled:

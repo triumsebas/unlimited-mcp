@@ -157,7 +157,13 @@ def main() -> None:
         summary = tail.decode("utf-8", errors="replace").strip()[-200:] or f"Exited with code {exit_code}."
         error = {"code": "NONZERO_EXIT", "message": f"Process exited with code {exit_code}.", "hint": "Check raw_output_ref for details.", "retryable": False}
     else:
-        summary = "Completed successfully."
+        _content = b""
+        for _p in (stdout_path, stderr_path):
+            if _p.exists():
+                _content = _p.read_bytes()[-500:]
+                if _content.strip():
+                    break
+        summary = _content.decode("utf-8", errors="replace").strip()[-500:] or "Completed successfully."
         error = None
 
     result = {
