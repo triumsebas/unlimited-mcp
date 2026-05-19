@@ -71,6 +71,7 @@ _PHASE_1_TOOLS = {
     # worker clarification
     "get_worker_questions",
     "answer_worker_questions",
+    "await_worker_questions",
     "resume_agent_task",
     # config / observability
     "list_capabilities",

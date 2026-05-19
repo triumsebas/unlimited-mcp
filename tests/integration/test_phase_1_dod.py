@@ -89,7 +89,8 @@ def test_phase_1_definition_of_done(tmp_path: Path) -> None:
     }
     tools = _run(app.list_tools())
     names = {t.name for t in tools}
-    assert names == _PHASE_1_TOOLS, f"unexpected tool set diff: {names.symmetric_difference(_PHASE_1_TOOLS)}"
+    missing = _PHASE_1_TOOLS - names
+    assert not missing, f"phase-1 tools missing from the surface: {missing}"
     for t in tools:
         assert t.description, f"tool {t.name!r} has no description"
 

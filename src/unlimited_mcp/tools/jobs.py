@@ -94,6 +94,7 @@ def submit_task(
             env_extra=env_extra,
             timeout_seconds=timeout_seconds,
             tool="submit_task",
+            idempotency_key=idempotency_key,
         )
 
     return agent_runner.submit(

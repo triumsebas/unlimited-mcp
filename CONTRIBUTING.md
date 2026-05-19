@@ -62,9 +62,19 @@ Run tests:
 # Unit tests only (no external tools needed)
 uv run pytest tests/unit/
 
+# Tier A regression smoke suite — headless, ~seconds, run on every change
+uv run pytest tests/integration/test_smoke.py -q
+
 # Include integration tests (requires aider, opencode, ts on PATH)
 uv run pytest -m "not requires_opencode_key"
 ```
+
+`tests/integration/test_smoke.py` is the **Tier A** regression suite: one
+test per MCP capability plus pins for fixed bugs. It must be green before
+every commit. The **Tier B** live end-to-end battery (real agents, remote
+SSH) is documented in [AGENTS.md](AGENTS.md) → "Regression suite" and can
+be driven by the `/selftest` skill in Claude Code; run it before a version
+bump.
 
 Lint and type-check:
 
@@ -97,7 +107,9 @@ Test it with `lookup_agent_cli('your_agent')` after adding.
 ## Pull requests
 
 - Keep PRs focused — one feature or fix per PR
-- Add or update tests for any changed behavior
+- Add or update tests for any changed behavior — a new capability needs a
+  Tier A smoke test; a fixed bug needs a regression pin
+- Tier A (`tests/integration/test_smoke.py`) must be green
 - `ruff` and `mypy` must pass (CI checks both)
 - For larger features, open an issue first to discuss approach
 

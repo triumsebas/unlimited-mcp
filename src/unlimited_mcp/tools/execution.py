@@ -53,6 +53,7 @@ def run_command(
     confirm_token: str | None = None,
     extra_allowed_roots: list[str] | None = None,
     tool: str = "run_command",
+    idempotency_key: str | None = None,
 ) -> JobResult:
     """Apply the safety pipeline to *argv* then submit to :class:`LocalRunner`."""
     decision = safety.check_run_command(
@@ -67,6 +68,7 @@ def run_command(
         env_extra=env_extra,
         timeout_seconds=timeout_seconds,
         tool=tool,
+        idempotency_key=idempotency_key,
     )
 
 

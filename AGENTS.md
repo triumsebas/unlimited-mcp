@@ -351,6 +351,80 @@ All four tests must pass before setting `verified: true`.
 
 ---
 
+## Regression suite (Tier A + Tier B)
+
+The project ships a two-tier regression suite so that code changes don't
+silently break a subsystem. **Tier A is automated and cheap; Tier B is a
+live end-to-end checklist you (the orchestrator) execute on request.**
+
+### Tier A — automated, every change
+
+`tests/integration/test_smoke.py` — headless, no API keys, ~seconds. Drives
+the server through the real MCP path with `echo`/`sleep` only. One focused
+test per capability category (tool surface, config CRUD, sysops, safety,
+lifecycle, idempotency, cancel, local + ts delegation, cleanup/logs), plus
+explicit regression pins for shipped bugs (summary population, `TsRunner`
+`job_id`, `submit_task` argv idempotency).
+
+Run it with `uv run pytest tests/integration/test_smoke.py -q` (or the full
+`uv run pytest -q`). Tier A must be green before **any** commit.
+
+### Tier B — live end-to-end, before a version bump
+
+Run these with real agents. They need `OPENCODE_API_KEY`, a configured
+`smolagents` agent, and SSH to `mcp_localhost`. Each step is one MCP call;
+verify the stated condition before moving on.
+
+1. **Sysops remote** — `run_command(["echo","b-remote"], exec_host="mcp_localhost")`
+   → `await_job` → `completed` and `b-remote` in `summary`.
+2. **Agent local + worktree** — `delegate_to_agent("opencode_flash",
+   prompt="add a one-line docstring to any .py file", cwd=<a git repo>,
+   workspace="safe_dev")` → `await_job` → `completed`, non-null `branch`
+   and `diff_ref`, non-empty `changed_files`.
+3. **ts queue + large prompt** — `delegate_to_agent("opencode_flash",
+   prompt='Say exactly: "b-ts OK"\n' + "x"*70000, workspace="none",
+   queue="ts")` → `await_job` → `completed` (exercises the stdin/file
+   fallback and the durable queue).
+4. **Agent remote + remote worktree** —
+   `delegate_to_agent("opencode_ssh_flash", prompt="add a one-line
+   docstring to any .py file", cwd=<repo on mcp_localhost>,
+   workspace="safe_dev", exec_host="mcp_localhost")` → `completed` with a
+   `branch`.
+5. **Compute / script** — `delegate_to_agent("smolagents_opencode",
+   prompt='Given {"a":1,"b":2}, write and run code that prints the sum of
+   the values', workspace="none")` → `completed`, summary contains `3`.
+6. **run_and_summarize + clarify** —
+   (a) `run_and_summarize(["echo","summarize-me"])` → `completed`.
+   (b) `delegate_to_agent("opencode_flash", prompt="refactor X",
+   clarify_rounds=1, ...)` → `await_worker_questions` →
+   `answer_worker_questions` → job reaches `completed`.
+
+### Version-bump policy (applies to Claude and Codex)
+
+When the user asks to **bump the version**:
+
+1. Run **Tier A**. If anything fails: stop, report which test, do **not**
+   bump.
+2. If Tier A is green, run **Tier B**. If anything fails: stop, report
+   which step, do **not** bump.
+3. Only if **both** tiers pass: bump the version, commit, push.
+
+Tier A also runs on every ordinary change (it's free). Tier B can be run
+on its own ("run the battery") without a bump. The **only** way to skip
+Tier B is an explicit user instruction ("bump without Tier B" — typical
+for docs-only changes); never skip it on your own judgement.
+
+### Keep the suite in sync
+
+The suite only protects what it covers. Whenever you add or change code —
+a new tool, a new runner/queue path, a new agent param, a behaviour change
+— **check whether Tier A (`test_smoke.py`) or the agent verification
+protocol needs a new or updated test, and add it in the same change**. A
+new capability with no smoke test is an untested capability; a fixed bug
+with no regression pin will come back.
+
+---
+
 ## Codex-specific notes
 
 - **`codex exec` is one-shot**: the session ends when the conversation ends.

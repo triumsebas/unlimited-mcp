@@ -383,6 +383,7 @@ care about.
 | [CLAUDE.md](CLAUDE.md) | Claude Code entry point — imports AGENTS.md and adds only the Claude-Code-specific notes |
 | [CONTRIBUTING.md](CONTRIBUTING.md) | Developer guide — how to add agents, run tests, contribute code |
 | [skills/delegate/SKILL.md](skills/delegate/SKILL.md) | The `/delegate` skill for Claude Code — opinionated delegation patterns; defers to AGENTS.md for the tool reference |
+| [skills/selftest/SKILL.md](skills/selftest/SKILL.md) | The `/selftest` skill for Claude Code — runs the Tier A + Tier B regression battery and reports pass/fail |
 | [knowledge.yaml](src/unlimited_mcp/knowledge.yaml) | Built-in catalog of agent CLIs and providers — what the server knows before you configure anything |
 
 ---
