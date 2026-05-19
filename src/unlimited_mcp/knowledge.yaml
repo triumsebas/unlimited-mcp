@@ -159,6 +159,20 @@ clis:
         default: null
         render: "--provider {value}"
     verified: false
+  cline:
+    docs_url: "https://docs.cline.bot/cline-cli/getting-started"
+    install_hint: "npm install -g cline"
+    # --yolo skips all tool-call approval prompts (fully autonomous).
+    # Large prompts fall back to stdin: `cline --yolo` reads from stdin when piped.
+    command_template: "cline --yolo {prompt}"
+    stdin_command_template: "cline --yolo"
+    prompt_via: arg_with_stdin_fallback
+    params:
+      model:
+        type: str
+        default: null
+        render: "--model {value}"
+    verified: false
   jcode:
     docs_url: "https://jcode.ai/docs"
     install_hint: "curl -fsSL https://jcode.ai/install.sh | bash"

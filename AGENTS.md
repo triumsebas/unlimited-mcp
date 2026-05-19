@@ -313,8 +313,8 @@ configure_agent('aider_local', set={'model': 'claude-sonnet-4-6'})
 
 ## Verifying a new coding agent
 
-Run these three tests before marking an agent as `verified: true` in knowledge.yaml.
-All three use `workspace="none"` and `add_allowed_root("/tmp")` first.
+Run these four tests before marking an agent as `verified: true` in knowledge.yaml.
+All tests use `workspace="none"` and require `add_allowed_root("/tmp")` first.
 
 **Test 1 — inline prompt**
 ```python
@@ -338,6 +338,16 @@ delegate_to_agent(agent_name,
 ```
 If the agent hangs waiting for a permission prompt, add `--yolo` /
 `--dangerously-skip-permissions` to its `command_template` in knowledge.yaml.
+
+**Test 4 — background execution via ts queue**
+```python
+job = delegate_to_agent(agent_name, prompt='Say exactly: "<agent> background OK"',
+                        workspace="none", queue="ts", timeout_seconds=60)
+r = await_job(job['job_id'])
+# Verify: r['status'] == 'completed' and '<agent> background OK' in r['summary']
+```
+This test validates both the agent and the durable ts queue end-to-end.
+All four tests must pass before setting `verified: true`.
 
 ---
 
