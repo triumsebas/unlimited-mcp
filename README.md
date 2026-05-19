@@ -354,7 +354,7 @@ Any MCP-compatible orchestrator should work with no or minor changes. If you tes
 
 ### 🔜 Phase 4 — Notifications & observability
 - **ACP client backend** *(first priority)* — native [Agent Client Protocol](https://agentclientprotocol.com/) support so any ACP-compatible agent works as a worker without a custom adapter. The [ACP registry](https://github.com/agentclientprotocol/registry) lists 30+ agents already shipping ACP — OpenCode (`opencode acp`), Cline, Gemini CLI, Goose, Kilo, Dirac, and more. Benefits over the current CLI model: streaming progress replaces polling, structured diffs replace raw patch files, and `session/set_mode` maps cleanly to workspace presets.
-- **Anthropic direct provider** — query Claude models directly as a provider for summarization, analysis, and review tasks without going through an agent CLI
+- **Anthropic direct provider** — planned if there is enough demand. In the meantime, LiteLLM (local proxy) and OpenRouter (cloud) already cover this with no additional setup: both expose an OpenAI-compatible endpoint that works with the existing provider configuration.
 - **Webhook / instant messaging notifications** — get notified when long background jobs complete
 - **Web dashboard** — monitor active and completed jobs visually
 
