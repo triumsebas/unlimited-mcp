@@ -99,16 +99,16 @@ How much you save isn't a fixed number — it scales with *your* strategy: the m
 |---|---|---|
 | **opencode** | Full-featured coding tasks, supports subscriptions | ✅ |
 | **aider** | Git-aware code editing with SEARCH/REPLACE diffs | ✅ |
-| **claude** (Claude Code CLI) | Delegate to Claude Code programmatically | ✅ |
-| **codex** | OpenAI's Codex CLI | ✅ |
-| **goose** | Block's agentic coding with model selection | ✅ |
-| **hermes** | Multi-provider coding agent | ✅ |
+| **Claude Code** (CLI) | Delegate to Claude Code programmatically | ✅ |
+| **Codex** (CLI) | OpenAI's Codex CLI | ✅ |
+| **Goose** | Block's agentic coding with model selection | ✅ |
+| **Hermes** | Multi-provider coding agent | ✅ |
 | **jcode** | Jcode.ai agent built in Rust — fast tool-call execution | ✅ |
 | **smolagents** | HuggingFace Python-based agentic execution | ✅ |
 | **gptme** | Terminal-native agent with tool use | ✅ |
 | **pi** | Pi coding agent | ✅ |
 | **cline** | Autonomous coding agent with ACP support; configure any OpenAI-compatible provider via `cline auth` | ✅ |
-| **agy** (Antigravity) | Google's Gemini-powered coding agent; supports `model` param (`"Gemini 3.5 Flash (Low/Medium/High)"`) and `sandbox` mode | ✅ |
+| **Antigravity** (CLI agy) | Google's Gemini-powered coding agent | ✅ |
 
 > **Note on the `claude` worker:** Claude as a *worker* is best used pointed at other providers. Anthropic subscriptions cap usage per command, so a Claude-Code agent doing the heavy delegated work will hit those limits fast — the whole point of this tool is to keep your Claude *orchestrator* free. Use `claude` as a worker only for occasional high-quality tasks; send the bulk of delegated work to other providers (OpenRouter, local GPU, etc.).
 
