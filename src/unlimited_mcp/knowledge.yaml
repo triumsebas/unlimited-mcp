@@ -159,6 +159,31 @@ clis:
         default: null
         render: "--provider {value}"
     verified: false
+  agy:
+    docs_url: "https://antigravity.dev"
+    install_hint: "# Download from https://antigravity.dev — installs as `agy`"
+    # Uses agy-wrapped (thin shell wrapper) to support --model switching via
+    # ~/.gemini/antigravity-cli/settings.json (mkdir-locked, restored after each run).
+    # In --print mode, agy executes tool calls autonomously without permission prompts.
+    # Do NOT add --dangerously-skip-permissions: it triggers extensive system exploration
+    # before the task, causing timeouts on simple prompts.
+    # Known model values: "Gemini 3.5 Flash", "Gemini 3.5 Flash (Low)",
+    #   "Gemini 3.5 Flash (Medium)", "Gemini 3.5 Flash (High)".
+    # --add-dir adds extra directories to the workspace beyond the process cwd.
+    command_template: "agy-wrapped --print {prompt}"
+    prompt_via: arg
+    params:
+      model:
+        type: str
+        default: null
+        render: "--model {value}"
+      sandbox:
+        type: bool
+        default: false
+        render:
+          "true": "--sandbox"
+          "false": ""
+    verified: true
   cline:
     docs_url: "https://docs.cline.bot/cline-cli/getting-started"
     install_hint: "npm install -g cline"

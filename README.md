@@ -108,6 +108,7 @@ How much you save isn't a fixed number — it scales with *your* strategy: the m
 | **gptme** | Terminal-native agent with tool use | ✅ |
 | **pi** | Pi coding agent | ✅ |
 | **cline** | Autonomous coding agent with ACP support; configure any OpenAI-compatible provider via `cline auth` | ✅ |
+| **agy** (Antigravity) | Google's Gemini-powered coding agent; supports `model` param (`"Gemini 3.5 Flash (Low/Medium/High)"`) and `sandbox` mode | ✅ |
 
 > **Note on the `claude` worker:** Claude as a *worker* is best used pointed at other providers. Anthropic subscriptions cap usage per command, so a Claude-Code agent doing the heavy delegated work will hit those limits fast — the whole point of this tool is to keep your Claude *orchestrator* free. Use `claude` as a worker only for occasional high-quality tasks; send the bulk of delegated work to other providers (OpenRouter, local GPU, etc.).
 
@@ -342,7 +343,7 @@ Any MCP-compatible orchestrator should work with no or minor changes. If you tes
 - Multi-queue routing (`local`, `ts`, `ts_serial`) with parallel execution
 - `run_shell` with audit log
 - Worker clarification rounds (`clarify_rounds`)
-- Additional agent CLIs: goose, hermes, jcode, pi, gptme
+- Additional agent CLIs: goose, hermes, jcode, pi, gptme, cline, agy (Antigravity)
 - `query_logs` for operational observability
 - Local inference: Ollama, MLX, LM Studio (any OpenAI-compatible endpoint)
 
