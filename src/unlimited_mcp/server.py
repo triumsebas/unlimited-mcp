@@ -595,13 +595,17 @@ def make_server(
         return _get_job_result(job_id, runner=runner)
 
     @app.tool()
-    def await_job(job_id: str, poll_interval: float = 60.0) -> JobResult:
+    def await_job(job_id: str, poll_interval: float = 3.0) -> JobResult:
         """Block until job_id finishes and return its final result.
 
-        Polls every poll_interval seconds (default 60) on the server side —
-        use this instead of a manual get_job_status loop to avoid flooding
-        the orchestrator context with intermediate polling calls.
-        Stamps seen_at on completion (same as get_job_result).
+        Waits on the server side instead of a manual get_job_status loop, to
+        avoid flooding the orchestrator context with intermediate polling calls.
+
+        A single call blocks at most ~45 s (under the MCP gateway's request
+        timeout). If the job is still running when that window expires, the
+        current result with status="running" is returned as a "keep waiting"
+        signal — call await_job again to continue. Stamps seen_at on completion
+        (same as get_job_result).
         """
         return _await_job(job_id, poll_interval=poll_interval, runner=runner)
 
@@ -1264,13 +1268,14 @@ def make_server(
                              it is working.  Do not call again.
           - "job_finished" → job reached a terminal state without asking.
           - "timed_out"    → agent gave up waiting; use resume_agent_task.
-          - "wait_expired" → max_wait elapsed, agent still exploring.
+          - "wait_expired" → wait window elapsed, agent still exploring.
                              Call again to keep waiting (one round-trip,
                              not a polling loop).
 
         A worker that takes 200-600 s to write its first questions costs you
-        a single tool call here, not dozens of polls.  max_wait bounds only
-        one call; re-invoking continues waiting from where it left off.
+        a single tool call here, not dozens of polls.  Each call blocks at most
+        ~45 s (under the MCP gateway's request timeout); a larger max_wait is
+        honoured across repeated calls, which continue where they left off.
         """
         return _await_worker_questions(job_id, runner=runner, max_wait=max_wait)
 

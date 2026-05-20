@@ -31,7 +31,7 @@ from pathlib import Path
 from typing import Any
 
 from unlimited_mcp.jobs.result import ErrorBlock, JobResult, JobStatus
-from unlimited_mcp.jobs.store import JobStore
+from unlimited_mcp.jobs.store import JobStore, file_lock
 
 
 _TERMINAL: frozenset[JobStatus] = frozenset({"completed", "failed", "cancelled"})
@@ -164,6 +164,17 @@ class TsRunner:
         worker_cmd = [sys.executable, "-m", "unlimited_mcp.jobs._ts_worker", str(job_dir), worker_args]
         ts_cmd = [self._ts_bin, "-L", job_id, *worker_cmd]
 
+        # B8: write the initial "running" result BEFORE enqueuing. ts spawns the
+        # worker as an independent process that may finish (writing a terminal
+        # result.json) before this method continues; writing "running" afterwards
+        # would clobber that good result and leave the job "running" forever.
+        initial = JobResult(
+            ok=False, job_id=job_id, status="running", tool=tool, tag=tag,
+            started_at=started_at, summary=label or None,
+            branch=branch, worktree_path=worktree_path,
+        )
+        self._store.write_result(initial)
+
         ts_result = subprocess.run(ts_cmd, capture_output=True, text=True, env=self._ts_env)
         if ts_result.returncode != 0:
             now = datetime.now(UTC)
@@ -184,12 +195,6 @@ class TsRunner:
             "idempotency_key": idempotency_key, "ts_slot_id": slot_id,
         })
 
-        initial = JobResult(
-            ok=False, job_id=job_id, status="running", tool=tool, tag=tag,
-            started_at=started_at, summary=label or None,
-            branch=branch, worktree_path=worktree_path,
-        )
-        self._store.write_result(initial)
         return initial
 
     def get_result(self, job_id: str) -> JobResult | None:
@@ -220,18 +225,26 @@ class TsRunner:
         if result.status in _TERMINAL:
             return result
 
-        meta = self._store.read_meta(job_id)
-        slot_id = meta.get("ts_slot_id") if meta else None
-        if slot_id:
-            subprocess.run([self._ts_bin, "-k", str(slot_id)],
-                           env=self._ts_env, capture_output=True, check=False)
+        # B4 (cross-process): the worker runs in a separate process, so a
+        # threading.Lock cannot serialize against its final write — take the
+        # per-job file lock. Policy: cancel wins. If the job was still running
+        # when cancel was called, we write "cancelled" even if the worker
+        # finished concurrently; the worker re-checks under the same lock and
+        # refuses to overwrite a "cancelled" result. Both orderings converge on
+        # "cancelled" deterministically.
+        with file_lock(self._store.lock_path(job_id)):
+            meta = self._store.read_meta(job_id)
+            slot_id = meta.get("ts_slot_id") if meta else None
+            if slot_id:
+                subprocess.run([self._ts_bin, "-k", str(slot_id)],
+                               env=self._ts_env, capture_output=True, check=False)
 
-        cancelled = result.model_copy(update={
-            "ok": False, "status": "cancelled",
-            "finished_at": now, "summary": "Cancelled by orchestrator.",
-        })
-        self._store.write_result(cancelled)
-        return cancelled
+            cancelled = result.model_copy(update={
+                "ok": False, "status": "cancelled",
+                "finished_at": now, "summary": "Cancelled by orchestrator.",
+            })
+            self._store.write_result(cancelled)
+            return cancelled
 
     def list_results(self) -> list[JobResult]:
         """Return all known results with stale-running detection."""

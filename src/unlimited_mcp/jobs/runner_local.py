@@ -33,18 +33,18 @@ import os
 import signal
 import subprocess
 import threading
-from datetime import UTC, datetime
-from pathlib import Path
 from collections.abc import Callable
+from datetime import UTC, datetime, timedelta
+from pathlib import Path
 from typing import BinaryIO
 
 from unlimited_mcp.jobs.result import CommandRecord, ErrorBlock, JobResult, JobStatus
-from unlimited_mcp.jobs.store import JobStore
+from unlimited_mcp.jobs.store import JobStore, atomic_write_json
 from unlimited_mcp.safety.redactor import Redactor
 
 
 def _write_state(path: Path, state: dict[str, object]) -> None:
-    path.write_text(json.dumps(state, default=str), encoding="utf-8")
+    atomic_write_json(path, state)
 
 
 def _read_state(path: Path) -> dict[str, object] | None:
@@ -90,6 +90,18 @@ class LocalRunner:
         self._idempotency: dict[str, str] = {}
         self._watchers: dict[str, threading.Thread] = {}
         self._cancelled: set[str] = set()
+        # B4: one lock per job serializes cancel() against the watcher's final
+        # write so a cancel and a completed result can't lost-update each other.
+        self._locks: dict[str, threading.Lock] = {}
+        self._locks_guard = threading.Lock()
+
+    def _lock_for(self, job_id: str) -> threading.Lock:
+        with self._locks_guard:
+            lock = self._locks.get(job_id)
+            if lock is None:
+                lock = threading.Lock()
+                self._locks[job_id] = lock
+            return lock
 
     # ------------------------------------------------------------------
     # Public API
@@ -180,6 +192,7 @@ class LocalRunner:
         if stdin_content is not None and hasattr(stdin_fh, "close"):
             stdin_fh.close()  # type: ignore[union-attr]
 
+        deadline = started_at + timedelta(seconds=timeout_seconds)
         _write_state(
             self._state_path(job_id),
             {
@@ -188,6 +201,11 @@ class LocalRunner:
                 "started_at": started_at.isoformat(),
                 "exit_code": None,
                 "finished_at": None,
+                # B1: persist the timeout so a dead watcher can still be enforced.
+                "deadline": deadline.isoformat(),
+                "timed_out": False,
+                # B4: durable cancel intent across MCP restarts.
+                "cancel_requested": False,
             },
         )
         initial = JobResult(
@@ -250,26 +268,30 @@ class LocalRunner:
         if result.status not in ("running", "queued"):
             return result
 
-        state = _read_state(self._state_path(job_id))
-        self._cancelled.add(job_id)
+        # B4: serialize against the watcher's final write. Inside the lock the
+        # cancel always wins, even if a "completed" result lands concurrently.
+        with self._lock_for(job_id):
+            self._cancelled.add(job_id)
+            state = _read_state(self._state_path(job_id))
+            if state is not None:
+                state["cancel_requested"] = True
+                _write_state(self._state_path(job_id), state)
+                pid = state.get("pid")
+                if isinstance(pid, int):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(pid, signal.SIGTERM)
 
-        if state:
-            pid = state.get("pid")
-            if isinstance(pid, int):
-                with contextlib.suppress(ProcessLookupError):
-                    os.kill(pid, signal.SIGTERM)
-
-        cancelled = JobResult(
-            ok=False,
-            job_id=job_id,
-            status="cancelled",
-            tool=result.tool,
-            started_at=result.started_at,
-            finished_at=now,
-            summary="Cancelled by orchestrator.",
-        )
-        self._store.write_result(cancelled)
-        return cancelled
+            cancelled = JobResult(
+                ok=False,
+                job_id=job_id,
+                status="cancelled",
+                tool=result.tool,
+                started_at=result.started_at,
+                finished_at=now,
+                summary="Cancelled by orchestrator.",
+            )
+            self._store.write_result(cancelled)
+            return cancelled
 
     def list_results(self) -> list[JobResult]:
         """Return the current :class:`~unlimited_mcp.jobs.result.JobResult`
@@ -300,9 +322,46 @@ class LocalRunner:
         if watcher is not None and watcher.is_alive():
             return result
         state = _read_state(self._state_path(job_id))
+        now = datetime.now(UTC)
         pid = state.get("pid") if state else None
+
+        # B1: durable timeout. If the process is still alive past the persisted
+        # deadline, the watcher that should have killed it is gone — enforce it.
+        deadline_raw = state.get("deadline") if state else None
+        if isinstance(pid, int) and isinstance(deadline_raw, str) and _pid_alive(pid):
+            with contextlib.suppress(ValueError):
+                if now > datetime.fromisoformat(deadline_raw):
+                    with contextlib.suppress(ProcessLookupError):
+                        os.kill(pid, signal.SIGKILL)
+                    failed = JobResult(
+                        ok=False,
+                        job_id=job_id,
+                        status="failed",
+                        tool=result.tool,
+                        started_at=result.started_at,
+                        finished_at=now,
+                        summary="Killed: exceeded persisted timeout deadline.",
+                        error=ErrorBlock(
+                            code="JOB_TIMEOUT",
+                            message="Exceeded persisted deadline; watcher was gone.",
+                            hint="Increase timeout_seconds or check why the worker hung.",
+                        ),
+                    )
+                    self._store.write_result(failed)
+                    return failed
+
+        # B2: a watcher that died after recording a terminal state.json (e.g. a
+        # crash during redaction) left enough to reconstruct the real outcome —
+        # reconcile from it instead of falsely reporting a zombie.
+        state_status = state.get("status") if state else None
+        if state_status in ("completed", "failed") and state is not None:
+            return self._reconcile_from_state(job_id, result, state)
+
         if isinstance(pid, int) and not _pid_alive(pid):
-            now = datetime.now(UTC)
+            # B2 honest limit: the process is gone with no terminal trace. It
+            # MAY have completed successfully but left nothing to recover from
+            # (dead parent can't waitid the child). Degrade to a soft zombie
+            # rather than asserting a definitive failure.
             failed = JobResult(
                 ok=False,
                 job_id=job_id,
@@ -310,16 +369,108 @@ class LocalRunner:
                 tool=result.tool,
                 started_at=result.started_at,
                 finished_at=now,
-                summary="Worker process died unexpectedly (detected on status check).",
+                summary="Worker process vanished without writing a result; it may have completed.",
                 error=ErrorBlock(
                     code="JOB_ZOMBIE",
-                    message="Process exited without writing a result.",
-                    hint="Check stderr.log for details.",
+                    message="Process exited without recording a terminal state.",
+                    hint="Check stdout.log/stderr.log — the work may have finished successfully.",
                 ),
             )
             self._store.write_result(failed)
             return failed
         return result
+
+    def _reconcile_from_state(
+        self, job_id: str, result: JobResult, state: dict[str, object]
+    ) -> JobResult:
+        """Rebuild a terminal :class:`JobResult` from a terminal ``state.json``."""
+        status = state.get("status")
+        status = status if status in ("completed", "failed") else "failed"
+        exit_code = state.get("exit_code")
+        exit_code = exit_code if isinstance(exit_code, int) else None
+        timed_out = bool(state.get("timed_out"))
+        finished_raw = state.get("finished_at")
+        finished_at = datetime.now(UTC)
+        if isinstance(finished_raw, str):
+            with contextlib.suppress(ValueError):
+                finished_at = datetime.fromisoformat(finished_raw)
+        duration_ms = int((finished_at - result.started_at).total_seconds() * 1000)
+        summary = self._summary_from_logs(job_id, status, exit_code, timed_out, None)
+        reconciled = JobResult(
+            ok=status == "completed",
+            job_id=job_id,
+            status=status,  # type: ignore[arg-type]
+            tool=result.tool,
+            started_at=result.started_at,
+            finished_at=finished_at,
+            duration_ms=duration_ms,
+            summary=summary,
+            raw_output_ref=str(self._store.stdout_path(job_id)),
+            commands_run=[CommandRecord(argv=[], exit_code=exit_code, duration_ms=duration_ms)],
+            branch=result.branch,
+            worktree_path=result.worktree_path,
+        )
+        self._store.write_result(reconciled)
+        return reconciled
+
+    def _summary_from_logs(
+        self,
+        job_id: str,
+        status: str,
+        exit_code: int | None,
+        timed_out: bool,
+        timeout_seconds: int | None,
+    ) -> str:
+        if timed_out:
+            return (
+                f"Killed after {timeout_seconds}s timeout."
+                if timeout_seconds is not None
+                else "Killed after timeout."
+            )
+        if status != "completed":
+            sp = self._store.stderr_path(job_id)
+            stderr_tail = sp.read_bytes()[-500:] if sp.exists() else b""
+            lines = stderr_tail.decode("utf-8", errors="replace").strip().splitlines()
+            return lines[-1][:500] if lines else f"exit_code={exit_code}"
+        content = b""
+        for p in (self._store.stdout_path(job_id), self._store.stderr_path(job_id)):
+            if p.exists():
+                content = p.read_bytes()[-500:]
+                if content.strip():
+                    break
+        return content.decode("utf-8", errors="replace").strip()[-500:] or "Completed successfully."
+
+    def _is_cancelled(self, job_id: str) -> bool:
+        if job_id in self._cancelled:
+            return True
+        existing = self._store.read_result(job_id)
+        if existing is not None and existing.status == "cancelled":
+            return True
+        state = _read_state(self._state_path(job_id))
+        return bool(state and state.get("cancel_requested"))
+
+    def _write_terminal_state(
+        self,
+        job_id: str,
+        pid: int,
+        started_at: datetime,
+        status: str,
+        exit_code: int | None,
+        finished_at: datetime,
+        timed_out: bool,
+    ) -> None:
+        state = _read_state(self._state_path(job_id)) or {}
+        state.update(
+            {
+                "status": status,
+                "pid": pid,
+                "started_at": started_at.isoformat(),
+                "exit_code": exit_code,
+                "finished_at": finished_at.isoformat(),
+                "timed_out": timed_out,
+            }
+        )
+        _write_state(self._state_path(job_id), state)
 
     def _watch(
         self,
@@ -346,71 +497,51 @@ class LocalRunner:
             stderr_fh.close()
 
         exit_code = proc.returncode
-
-        if self._redactor is not None:
-            for path in (
-                self._store.stdout_path(job_id),
-                self._store.stderr_path(job_id),
-            ):
-                if path.exists():
-                    path.write_bytes(self._redactor.redact_bytes(path.read_bytes()))
-
         finished_at = datetime.now(UTC)
         duration_ms = int((finished_at - started_at).total_seconds() * 1000)
         ok = exit_code == 0 and not timed_out
         status: JobStatus = "completed" if ok else "failed"
 
-        summary: str
-        if timed_out:
-            summary = f"Killed after {timeout_seconds}s timeout."
-        elif not ok:
-            stderr_tail = b""
-            sp = self._store.stderr_path(job_id)
-            if sp.exists():
-                stderr_tail = sp.read_bytes()[-500:]
-            last_line = stderr_tail.decode("utf-8", errors="replace").strip().splitlines()
-            summary = last_line[-1][:500] if last_line else f"exit_code={exit_code}"
-        else:
-            _content = b""
-            for _p in (self._store.stdout_path(job_id), self._store.stderr_path(job_id)):
-                if _p.exists():
-                    _content = _p.read_bytes()[-500:]
-                    if _content.strip():
-                        break
-            summary = _content.decode("utf-8", errors="replace").strip()[-500:] or "Completed successfully."
-
-        # Don't overwrite a cancel() — check both in-memory flag and persisted status.
-        if job_id in self._cancelled:
-            return
-        existing = self._store.read_result(job_id)
-        if existing is not None and existing.status == "cancelled":
-            return
-
-        result = JobResult(
-            ok=ok,
-            job_id=job_id,
-            status=status,
-            tool=tool,
-            started_at=started_at,
-            finished_at=finished_at,
-            duration_ms=duration_ms,
-            summary=summary,
-            raw_output_ref=str(self._store.stdout_path(job_id)),
-            commands_run=[CommandRecord(argv=[], exit_code=exit_code, duration_ms=duration_ms)],
-            branch=branch,
-            worktree_path=worktree_path,
+        # B2: record the terminal outcome to state.json BEFORE redaction. If the
+        # watcher dies during redaction (or the MCP server restarts), the next
+        # _check_zombie reconciles from this instead of falsely flagging a zombie.
+        self._write_terminal_state(
+            job_id, proc.pid, started_at, status, exit_code, finished_at, timed_out
         )
-        self._store.write_result(result)
-        _write_state(
-            self._state_path(job_id),
-            {
-                "status": status,
-                "pid": proc.pid,
-                "started_at": started_at.isoformat(),
-                "exit_code": exit_code,
-                "finished_at": finished_at.isoformat(),
-            },
-        )
+
+        # B2: redaction must never block writing the result. Swallow its errors.
+        if self._redactor is not None:
+            with contextlib.suppress(Exception):
+                for path in (
+                    self._store.stdout_path(job_id),
+                    self._store.stderr_path(job_id),
+                ):
+                    if path.exists():
+                        path.write_bytes(self._redactor.redact_bytes(path.read_bytes()))
+
+        summary = self._summary_from_logs(job_id, status, exit_code, timed_out, timeout_seconds)
+
+        # B4: serialize the final write against cancel(). Re-check cancellation
+        # inside the lock so a cancel can't be lost-updated by this write.
+        with self._lock_for(job_id):
+            if not self._is_cancelled(job_id):
+                result = JobResult(
+                    ok=ok,
+                    job_id=job_id,
+                    status=status,
+                    tool=tool,
+                    started_at=started_at,
+                    finished_at=finished_at,
+                    duration_ms=duration_ms,
+                    summary=summary,
+                    raw_output_ref=str(self._store.stdout_path(job_id)),
+                    commands_run=[
+                        CommandRecord(argv=[], exit_code=exit_code, duration_ms=duration_ms)
+                    ],
+                    branch=branch,
+                    worktree_path=worktree_path,
+                )
+                self._store.write_result(result)
         if cleanup_fn is not None:
             with contextlib.suppress(Exception):
                 cleanup_fn()

@@ -20,6 +20,7 @@ morning regardless of when it finished.
 
 from __future__ import annotations
 
+import os
 import subprocess
 import time
 from datetime import UTC, datetime
@@ -35,6 +36,12 @@ if TYPE_CHECKING:
 
 _TERMINAL: frozenset[JobStatus] = frozenset({"completed", "failed", "cancelled"})
 _ACTIVE: frozenset[JobStatus] = frozenset({"queued", "running", "pending_confirmation"})
+
+# B6: maximum seconds a single server-side long-poll (await_job /
+# await_worker_questions) may block. Kept under the MCP gateway's ~60s request
+# timeout, which otherwise aborts the call with JSON-RPC error -32001 before any
+# "keep waiting" sentinel can be returned to the orchestrator. Override via env.
+GATEWAY_SAFE_WAIT_SECONDS: float = float(os.environ.get("UNLIMITED_MAX_SERVER_WAIT", "45"))
 
 
 def submit_task(
@@ -140,16 +147,23 @@ def get_job_result(job_id: str, *, runner: LocalRunner) -> JobResult:
 def await_job(
     job_id: str,
     *,
-    poll_interval: float = 60.0,
+    poll_interval: float = 3.0,
+    max_wait: float = GATEWAY_SAFE_WAIT_SECONDS,
     runner: LocalRunner,
 ) -> JobResult:
     """Block until *job_id* reaches a terminal state, then return its result.
 
-    Polls every *poll_interval* seconds (default 60) server-side, so the
-    orchestrator makes a single MCP call instead of a polling loop.
-    Stamps ``seen_at`` on the result when the job completes (same as
+    Waits server-side so the orchestrator makes a single MCP call instead of a
+    busy polling loop. To stay under the MCP gateway's ~60s request timeout
+    (which would otherwise abort the call with ``-32001`` before returning), a
+    single invocation blocks at most ``max_wait`` seconds — clamped to
+    :data:`GATEWAY_SAFE_WAIT_SECONDS`. If the job is still running when that
+    window expires, the current **non-terminal** ``JobResult``
+    (``status="running"``) is returned as a "keep waiting" signal: call
+    ``await_job`` again to continue. Terminal results stamp ``seen_at`` (same as
     ``get_job_result``).
     """
+    deadline = time.monotonic() + min(max_wait, GATEWAY_SAFE_WAIT_SECONDS)
     while True:
         result = runner.get_result(job_id)
         if result is None:
@@ -158,6 +172,10 @@ def await_job(
             if result.seen_at is None:
                 result = result.model_copy(update={"seen_at": datetime.now(UTC)})
                 runner._store.write_result(result)
+            return result
+        # Don't sleep past the safe window — return the running result so the
+        # orchestrator re-invokes rather than letting the gateway time out.
+        if time.monotonic() + poll_interval >= deadline:
             return result
         time.sleep(poll_interval)
 

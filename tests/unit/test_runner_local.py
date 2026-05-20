@@ -260,3 +260,261 @@ def test_pid_alive_current_process() -> None:
 
 def test_pid_alive_nonexistent() -> None:
     assert _pid_alive(99999999) is False
+
+
+# ---------------------------------------------------------------------------
+# B3 — atomic state.json writes
+# ---------------------------------------------------------------------------
+
+
+def test_state_json_written_atomically(tmp_path: Path) -> None:
+    """A reader concurrent with many _write_state calls never sees partial JSON."""
+    import threading as _threading
+
+    from unlimited_mcp.jobs.store import atomic_write_json
+
+    # atomic_write_json is the exposed (no-underscore) shared helper.
+    assert callable(atomic_write_json)
+
+    path = tmp_path / "state.json"
+    _write_state(path, {"status": "running", "pid": 1})
+
+    stop = _threading.Event()
+    torn: list[str] = []
+
+    def writer() -> None:
+        i = 0
+        while not stop.is_set():
+            _write_state(path, {"status": "running", "pid": i, "payload": "x" * 4096})
+            i += 1
+
+    def reader() -> None:
+        while not stop.is_set():
+            # _read_state must never raise or return None due to a torn read.
+            if _read_state(path) is None:
+                torn.append("partial")
+
+    threads = [_threading.Thread(target=writer), _threading.Thread(target=reader)]
+    for t in threads:
+        t.start()
+    time.sleep(0.3)
+    stop.set()
+    for t in threads:
+        t.join()
+
+    assert torn == []
+
+
+# ---------------------------------------------------------------------------
+# B1 — durable timeout
+# ---------------------------------------------------------------------------
+
+
+def test_check_zombie_enforces_persisted_deadline(store: JobStore, monkeypatch) -> None:
+    """A live PID past its persisted deadline is killed and marked JOB_TIMEOUT."""
+    from datetime import UTC, datetime, timedelta
+
+    from unlimited_mcp.jobs import runner_local as rl
+    from unlimited_mcp.jobs.result import JobResult
+
+    runner = LocalRunner(store)
+    job_id = JobStore.make_job_id("test")
+    store.create(job_id)
+    started_at = datetime.now(UTC) - timedelta(seconds=1200)
+    store.write_result(
+        JobResult(ok=False, job_id=job_id, status="running", tool="test", started_at=started_at)
+    )
+    _write_state(
+        store.job_dir(job_id) / "state.json",
+        {
+            "status": "running",
+            "pid": 4242,
+            "started_at": started_at.isoformat(),
+            "deadline": (started_at + timedelta(seconds=600)).isoformat(),  # in the past
+        },
+    )
+
+    killed: list[tuple[int, int]] = []
+    monkeypatch.setattr(rl, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(rl.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+
+    result = runner.get_result(job_id)
+    assert result is not None
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "JOB_TIMEOUT"
+    assert (4242, __import__("signal").SIGKILL) in killed
+
+
+def test_check_zombie_keeps_running_before_deadline(store: JobStore, monkeypatch) -> None:
+    """A live PID still within its deadline stays running (no false timeout)."""
+    from datetime import UTC, datetime, timedelta
+
+    from unlimited_mcp.jobs import runner_local as rl
+    from unlimited_mcp.jobs.result import JobResult
+
+    runner = LocalRunner(store)
+    job_id = JobStore.make_job_id("test")
+    store.create(job_id)
+    started_at = datetime.now(UTC)
+    store.write_result(
+        JobResult(ok=False, job_id=job_id, status="running", tool="test", started_at=started_at)
+    )
+    _write_state(
+        store.job_dir(job_id) / "state.json",
+        {
+            "status": "running",
+            "pid": 4242,
+            "started_at": started_at.isoformat(),
+            "deadline": (started_at + timedelta(seconds=600)).isoformat(),  # in the future
+        },
+    )
+    monkeypatch.setattr(rl, "_pid_alive", lambda pid: True)
+    monkeypatch.setattr(rl.os, "kill", lambda pid, sig: pytest.fail("should not kill"))
+
+    result = runner.get_result(job_id)
+    assert result is not None
+    assert result.status == "running"
+
+
+# ---------------------------------------------------------------------------
+# B2 — false zombie reconciliation
+# ---------------------------------------------------------------------------
+
+
+def test_check_zombie_reconciles_completed_from_state(store: JobStore, monkeypatch) -> None:
+    """result.json='running' + terminal state.json + dead PID => reconstruct completed."""
+    from datetime import UTC, datetime
+
+    from unlimited_mcp.jobs import runner_local as rl
+    from unlimited_mcp.jobs.result import JobResult
+
+    runner = LocalRunner(store)
+    job_id = JobStore.make_job_id("test")
+    store.create(job_id)
+    started_at = datetime.now(UTC)
+    store.stdout_path(job_id).write_bytes(b"deliverable written ok\n")
+    store.write_result(
+        JobResult(ok=False, job_id=job_id, status="running", tool="test", started_at=started_at)
+    )
+    _write_state(
+        store.job_dir(job_id) / "state.json",
+        {
+            "status": "completed",
+            "pid": 4242,
+            "started_at": started_at.isoformat(),
+            "exit_code": 0,
+            "finished_at": datetime.now(UTC).isoformat(),
+            "timed_out": False,
+        },
+    )
+    monkeypatch.setattr(rl, "_pid_alive", lambda pid: False)  # process gone
+
+    result = runner.get_result(job_id)
+    assert result is not None
+    assert result.status == "completed"
+    assert result.ok is True
+    assert result.error is None
+
+
+def test_check_zombie_soft_zombie_without_terminal_state(store: JobStore, monkeypatch) -> None:
+    """Dead PID with no terminal state => soft JOB_ZOMBIE (may have completed)."""
+    from datetime import UTC, datetime
+
+    from unlimited_mcp.jobs import runner_local as rl
+    from unlimited_mcp.jobs.result import JobResult
+
+    runner = LocalRunner(store)
+    job_id = JobStore.make_job_id("test")
+    store.create(job_id)
+    started_at = datetime.now(UTC)
+    store.write_result(
+        JobResult(ok=False, job_id=job_id, status="running", tool="test", started_at=started_at)
+    )
+    _write_state(
+        store.job_dir(job_id) / "state.json",
+        {"status": "running", "pid": 4242, "started_at": started_at.isoformat()},
+    )
+    monkeypatch.setattr(rl, "_pid_alive", lambda pid: False)
+
+    result = runner.get_result(job_id)
+    assert result is not None
+    assert result.status == "failed"
+    assert result.error is not None
+    assert result.error.code == "JOB_ZOMBIE"
+
+
+def test_redactor_exception_does_not_block_result(tmp_path: Path) -> None:
+    """A crashing redactor must not prevent the watcher from writing result.json."""
+
+    class _BoomRedactor:
+        def redact_bytes(self, data: bytes) -> bytes:
+            raise RuntimeError("boom")
+
+    store = JobStore(tmp_path / "jobs")
+    runner = LocalRunner(store, redactor=_BoomRedactor())  # type: ignore[arg-type]
+    result = runner.submit([sys.executable, "-c", "print('ok')"])
+    runner.join_all()
+    final = runner.get_result(result.job_id)
+    assert final is not None
+    assert final.status == "completed"
+
+
+# ---------------------------------------------------------------------------
+# B4 — cancel/watch lost-update
+# ---------------------------------------------------------------------------
+
+
+def test_cancel_persists_intent_in_state(runner: LocalRunner, store: JobStore) -> None:
+    result = runner.submit(
+        [sys.executable, "-c", "import time; time.sleep(30)"], timeout_seconds=60
+    )
+    time.sleep(0.1)
+    runner.cancel(result.job_id)
+    state = _read_state(store.job_dir(result.job_id) / "state.json")
+    assert state is not None
+    assert state.get("cancel_requested") is True
+    runner.join_all(timeout=3.0)
+
+
+def test_cancel_wins_over_concurrent_completion(store: JobStore) -> None:
+    """When the watcher finishes while cancel holds the lock, cancel wins and the
+    watcher must not overwrite the cancelled result."""
+    from datetime import UTC, datetime
+
+    from unlimited_mcp.jobs.result import JobResult
+
+    runner = LocalRunner(store)
+    job_id = JobStore.make_job_id("test")
+    store.create(job_id)
+    started_at = datetime.now(UTC)
+    store.write_result(
+        JobResult(ok=False, job_id=job_id, status="running", tool="test", started_at=started_at)
+    )
+    _write_state(
+        store.job_dir(job_id) / "state.json",
+        {"status": "running", "pid": os.getpid(), "started_at": started_at.isoformat(),
+         "cancel_requested": False},
+    )
+
+    # Mark cancelled (as cancel() would inside its lock), then have the watcher's
+    # final-section guard run: it must observe the cancel and refuse to write.
+    runner._cancelled.add(job_id)
+    store.write_result(
+        JobResult(ok=False, job_id=job_id, status="cancelled", tool="test",
+                  started_at=started_at, finished_at=datetime.now(UTC))
+    )
+
+    assert runner._is_cancelled(job_id) is True
+
+    # Simulate the watcher's guarded final write.
+    with runner._lock_for(job_id):
+        if not runner._is_cancelled(job_id):
+            store.write_result(
+                JobResult(ok=True, job_id=job_id, status="completed", tool="test",
+                          started_at=started_at, finished_at=datetime.now(UTC))
+            )
+
+    final = store.read_result(job_id)
+    assert final is not None
+    assert final.status == "cancelled"

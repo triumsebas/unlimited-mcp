@@ -37,14 +37,15 @@ from datetime import UTC, datetime
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
-_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
-
 from unlimited_mcp.jobs.result import JobResult
 from unlimited_mcp.jobs.store import JobStore
+from unlimited_mcp.tools.jobs import GATEWAY_SAFE_WAIT_SECONDS
 
 if TYPE_CHECKING:
     from unlimited_mcp.agents.runner import AgentRunner
     from unlimited_mcp.jobs.runner_local import LocalRunner
+
+_TERMINAL_STATUSES = frozenset({"completed", "failed", "cancelled"})
 
 _ROUND_Q_RE = re.compile(r"^round_(\d+)_questions\.json$")
 _ROUND_A_RE = re.compile(r"^round_(\d+)_answers\.json$")
@@ -182,15 +183,20 @@ def await_worker_questions(
       final job status.
     - ``outcome="timed_out"`` — the agent wrote ``timeout.json`` (it gave up
       waiting for answers).  Use ``resume_agent_task`` to recover.
-    - ``outcome="wait_expired"`` — ``max_wait`` elapsed and the agent is still
-      exploring (no questions yet).  Call again to keep waiting; this costs
-      one MCP round-trip, not a polling loop.
+    - ``outcome="wait_expired"`` — the wait window elapsed and the agent is
+      still exploring (no questions yet).  Call again to keep waiting; this
+      costs one MCP round-trip, not a polling loop.
 
     Because waiting happens server-side, a slow worker that takes 200-600 s to
     write its first questions costs the orchestrator a single tool call, not
     dozens.  ``max_wait`` only bounds one call — re-invoking continues waiting.
+
+    B6: each call blocks at most :data:`GATEWAY_SAFE_WAIT_SECONDS` regardless of
+    ``max_wait``, to stay under the MCP gateway's ~60 s request timeout (which
+    would otherwise abort the call with ``-32001`` before ``wait_expired`` could
+    be returned). A larger ``max_wait`` is honoured across repeated calls.
     """
-    deadline = time.monotonic() + max_wait
+    deadline = time.monotonic() + min(max_wait, GATEWAY_SAFE_WAIT_SECONDS)
     while True:
         info = get_worker_questions(job_id, runner=runner)
 

@@ -26,11 +26,13 @@ operators can ``ls jobs/`` and read off chronology without any tooling.
 from __future__ import annotations
 
 import contextlib
+import fcntl
 import json
 import os
 import secrets
 import shutil
 import tempfile
+from collections.abc import Iterator
 from datetime import UTC, datetime, timedelta
 from pathlib import Path
 from typing import Any
@@ -89,6 +91,9 @@ class JobStore:
     def artifacts_dir(self, job_id: str) -> Path:
         return self.job_dir(job_id) / "artifacts"
 
+    def lock_path(self, job_id: str) -> Path:
+        return self.job_dir(job_id) / ".lock"
+
     # ---- create / read / write ------------------------------------------
 
     def create(self, job_id: str) -> Path:
@@ -102,7 +107,7 @@ class JobStore:
     def write_result(self, result: JobResult) -> None:
         """Atomically write ``result.json`` for a job."""
         self.create(result.job_id)
-        _atomic_write_json(
+        atomic_write_json(
             self.result_path(result.job_id),
             result.model_dump(mode="json"),
         )
@@ -117,7 +122,7 @@ class JobStore:
     def write_meta(self, job_id: str, meta: dict[str, Any]) -> None:
         """Atomically write ``meta.json`` with invocation parameters."""
         self.create(job_id)
-        _atomic_write_json(self.meta_path(job_id), meta)
+        atomic_write_json(self.meta_path(job_id), meta)
 
     def read_meta(self, job_id: str) -> dict[str, Any] | None:
         path = self.meta_path(job_id)
@@ -196,8 +201,35 @@ class JobStore:
         return evicted
 
 
-def _atomic_write_json(path: Path, data: Any) -> None:
-    """Write JSON atomically via tempfile + os.replace."""
+@contextlib.contextmanager
+def file_lock(lock_path: Path) -> Iterator[None]:
+    """Cross-process exclusive lock via ``fcntl.flock`` on a per-job lockfile.
+
+    Used to serialize the final ``result.json`` write between two *separate
+    processes* — the MCP server (``TsRunner.cancel``) and the task-spooler
+    worker (``_ts_worker``) — which a ``threading.Lock`` cannot coordinate.
+
+    Caveat: ``flock`` is per-host and unreliable on NFS (same constraint as
+    ``os.replace``). Adequate for a single-host ``ts`` queue; a networked
+    store would need a different mechanism.
+    """
+    lock_path.parent.mkdir(parents=True, exist_ok=True)
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    try:
+        fcntl.flock(fd, fcntl.LOCK_EX)
+        yield
+    finally:
+        with contextlib.suppress(OSError):
+            fcntl.flock(fd, fcntl.LOCK_UN)
+        os.close(fd)
+
+
+def atomic_write_json(path: Path, data: Any) -> None:
+    """Write JSON atomically via tempfile + os.replace.
+
+    Shared by :class:`JobStore` (result/meta) and the runners' ``state.json``
+    so concurrent readers never observe a half-written or truncated file.
+    """
     path.parent.mkdir(parents=True, exist_ok=True)
     tmp_fd, tmp_path = tempfile.mkstemp(dir=path.parent, prefix=f".{path.name}.", suffix=".tmp")
     try:

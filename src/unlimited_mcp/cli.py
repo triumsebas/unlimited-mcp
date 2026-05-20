@@ -27,10 +27,11 @@ def main(argv: list[str] | None = None) -> int:
             "Usage: unlimited-mcp <subcommand> [options]\n"
             "\n"
             "Subcommands:\n"
-            "  init    Create default config files and print MCP snippet.\n"
-            "  serve   Start the MCP server over stdio (default transport).\n"
-            "  doctor  Check environment: config, binaries, recent failures.\n"
-            "  jobs    Manage background jobs (jobs ls).\n"
+            "  init          Create default config files and print MCP snippet.\n"
+            "  serve         Start the MCP server over stdio (default transport).\n"
+            "  doctor        Check environment: config, binaries, recent failures.\n"
+            "  export-config Dump active config as JSON to stdout.\n"
+            "  jobs          Manage background jobs (jobs ls).\n"
             "\n"
             "Options:\n"
             "  -h, --help   Show this message.",
@@ -45,6 +46,8 @@ def main(argv: list[str] | None = None) -> int:
         return _cmd_init(args[1:])
     if subcmd == "doctor":
         return _cmd_doctor(args[1:])
+    if subcmd == "export-config" or subcmd == "export_config":
+        return _cmd_export_config(args[1:])
     if subcmd == "jobs":
         return _cmd_jobs(args[1:])
 
@@ -282,6 +285,49 @@ def _cmd_doctor(args: list[str]) -> int:
         print("[OK]  No errors.jsonl found (clean slate).")
 
     return 0 if ok else 1
+
+
+# ---------------------------------------------------------------------------
+# export-config
+# ---------------------------------------------------------------------------
+
+
+def _cmd_export_config(args: list[str]) -> int:
+    from unlimited_mcp.config.loader import ConfigStore
+    from unlimited_mcp.paths import config_path
+
+    if "-h" in args or "--help" in args:
+        print(
+            "unlimited-mcp export-config\n"
+            "\n"
+            "Dump the active configuration (agents, providers, allowed_roots)\n"
+            "as JSON to stdout.",
+            file=sys.stderr,
+        )
+        return 0
+
+    cfg_file = config_path()
+    if not cfg_file.exists():
+        print(
+            "error: config.yaml not found. Run: unlimited-mcp init",
+            file=sys.stderr,
+        )
+        return 1
+
+    try:
+        cfg = ConfigStore(cfg_file).get()
+    except Exception as exc:
+        print(f"error: failed to load config: {exc}", file=sys.stderr)
+        return 1
+
+    data = {
+        "allowed_roots": cfg.allowed_roots,
+        "agents": {k: v.model_dump(mode="json") for k, v in cfg.agents.items()},
+        "providers": {k: v.model_dump(mode="json") for k, v in cfg.providers.items()},
+    }
+    json.dump(data, sys.stdout, indent=2)
+    print()
+    return 0
 
 
 # ---------------------------------------------------------------------------

@@ -63,6 +63,30 @@ def _write_json(path: Path, data: object) -> None:
         raise
 
 
+def _read_status(path: Path) -> str | None:
+    try:
+        with path.open(encoding="utf-8") as fh:
+            data = json.load(fh)
+        return data.get("status") if isinstance(data, dict) else None
+    except (OSError, json.JSONDecodeError, ValueError):
+        return None
+
+
+def _write_result_unless_cancelled(job_dir: Path, result: object) -> None:
+    """Write ``result.json`` under the per-job file lock, unless a concurrent
+    ``TsRunner.cancel()`` (separate process) already wrote ``"cancelled"``.
+
+    Policy: cancel wins. flock coordinates cross-process; a ``threading.Lock``
+    would not, since the worker runs in its own process.
+    """
+    from unlimited_mcp.jobs.store import file_lock
+
+    result_path = job_dir / "result.json"
+    with file_lock(job_dir / ".lock"):
+        if _read_status(result_path) != "cancelled":
+            _write_json(result_path, result)
+
+
 def _remove_worktree(worktree_path: str) -> None:
     try:
         subprocess.run(
@@ -197,7 +221,8 @@ def main() -> None:
         "confirm_token": None,
         "confirm_reason": None,
     }
-    _write_json(job_dir / "result.json", result)
+    # B4 (cross-process): serialize against TsRunner.cancel() — cancel wins.
+    _write_result_unless_cancelled(job_dir, result)
 
     if worktree_path:
         _remove_worktree(worktree_path)

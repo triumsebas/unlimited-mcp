@@ -1,13 +1,9 @@
 ## Pre-task clarification protocol
 
-This is the VERY FIRST thing you do — before reading more than the minimum
-code needed to know what to ask, before any planning, before any edits.
-Resolve ambiguity through files, not assumptions.
+Before starting the task, identify any ambiguities that would change your implementation.
 
 **Rules:**
 - Write ALL your questions for a round at once in a single file — do not ask one at a time.
-- Decide what to ask quickly. Do not deep-dive the whole repo before round 001;
-  a short scan to identify the real ambiguities is enough.
 - If you have NO questions (the task is unambiguous), you MUST still write
   `round_001_questions.json` with an empty array `[]` and then proceed
   immediately. This is the signal that you will not ask — never skip it.

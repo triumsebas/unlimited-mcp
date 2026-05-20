@@ -2,13 +2,18 @@
 
 from __future__ import annotations
 
+import os
+import time
+from datetime import UTC, datetime
 from pathlib import Path
 
 import pytest
 
+from unlimited_mcp.jobs.result import JobResult
 from unlimited_mcp.jobs.runner_local import LocalRunner
 from unlimited_mcp.jobs.store import JobStore
-from unlimited_mcp.tools.jobs import cancel_job, get_job_result, list_jobs
+from unlimited_mcp.tools.jobs import await_job, cancel_job, get_job_result, list_jobs
+from unlimited_mcp.tools.workers_tools import await_worker_questions
 
 # ---------------------------------------------------------------------------
 # Fixtures
@@ -125,3 +130,83 @@ def test_cancel_running_job_returns_cancelled(runner: LocalRunner) -> None:
     assert result.status == "cancelled"
     assert result.job_id == submitted.job_id
     runner.join_all()
+
+
+# ---------------------------------------------------------------------------
+# B6 — server-side long-poll must cap below the MCP gateway timeout (~60s)
+# ---------------------------------------------------------------------------
+
+
+def _make_running_job(store: JobStore) -> str:
+    """Create a job that looks 'running' with a live PID so zombie detection
+    leaves it running."""
+    job_id = JobStore.make_job_id("test")
+    store.create(job_id)
+    now = datetime.now(UTC)
+    store.write_result(
+        JobResult(ok=False, job_id=job_id, status="running", tool="test", started_at=now)
+    )
+    # Live PID + no deadline => _check_zombie keeps it running.
+    (store.job_dir(job_id) / "state.json").write_text(
+        f'{{"status": "running", "pid": {os.getpid()}, "started_at": "{now.isoformat()}"}}',
+        encoding="utf-8",
+    )
+    return job_id
+
+
+def test_await_job_returns_running_when_window_expires(store: JobStore) -> None:
+    """A job that never finishes must not hang — await_job returns the running
+    result once its bounded wait window expires (the 'keep waiting' signal)."""
+    runner = LocalRunner(store)
+    job_id = _make_running_job(store)
+
+    start = time.monotonic()
+    result = await_job(job_id, poll_interval=0.02, max_wait=0.2, runner=runner)
+    elapsed = time.monotonic() - start
+
+    assert result.status == "running"  # non-terminal => caller re-invokes
+    assert elapsed < 5.0  # bounded — did not block indefinitely
+
+
+def test_await_job_returns_terminal_when_finished(store: JobStore) -> None:
+    runner = LocalRunner(store)
+    job_id = JobStore.make_job_id("test")
+    store.create(job_id)
+    now = datetime.now(UTC)
+    store.write_result(
+        JobResult(ok=True, job_id=job_id, status="completed", tool="test",
+                  started_at=now, finished_at=now)
+    )
+    result = await_job(job_id, poll_interval=0.02, max_wait=0.2, runner=runner)
+    assert result.status == "completed"
+    assert result.seen_at is not None  # stamped on first terminal read
+
+
+def test_await_job_caps_max_wait_to_gateway_safe(store: JobStore, monkeypatch) -> None:
+    """Even a huge max_wait is clamped to the gateway-safe ceiling."""
+    from unlimited_mcp.tools import jobs as jobs_mod
+
+    monkeypatch.setattr(jobs_mod, "GATEWAY_SAFE_WAIT_SECONDS", 0.2)
+    runner = LocalRunner(store)
+    job_id = _make_running_job(store)
+
+    start = time.monotonic()
+    result = await_job(job_id, poll_interval=0.02, max_wait=600.0, runner=runner)
+    elapsed = time.monotonic() - start
+
+    assert result.status == "running"
+    assert elapsed < 5.0  # clamped to ~0.2s, nowhere near 600s
+
+
+def test_await_worker_questions_wait_expired_within_cap(store: JobStore) -> None:
+    """A running job that never asks returns wait_expired within the window,
+    not a gateway-killing hang."""
+    runner = LocalRunner(store)
+    job_id = _make_running_job(store)
+
+    start = time.monotonic()
+    info = await_worker_questions(job_id, runner=runner, max_wait=0.2, poll_interval=0.02)
+    elapsed = time.monotonic() - start
+
+    assert info["outcome"] == "wait_expired"
+    assert elapsed < 5.0
