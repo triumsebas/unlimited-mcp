@@ -93,6 +93,19 @@ agent making forward progress, or looping on the same error?
 
 ---
 
+## Clarify Q&A that won't close
+
+When you delegated with `clarify_rounds > 0` and the agent won't finish the
+Q&A cleanly, do **not** wait out its 600 s budget. The full decision table —
+the one-more-`await_worker_questions` check after your last round, when to
+answer `STOP` vs `cancel_job` + `resume_agent_task`, and the
+finished-but-did-no-work case — lives in **`AGENTS.md` → "Never sit through the
+worker's 600 s timeout"** and **"Fallback when the agent won't start work
+cleanly"**. `resume_agent_task` replays the Q&A history into a fresh prompt, so
+it also rescues a model that mishandled the question files.
+
+---
+
 ## Background monitoring with `ScheduleWakeup` (Claude Code only)
 
 By default, after submitting a job you return control to the user immediately

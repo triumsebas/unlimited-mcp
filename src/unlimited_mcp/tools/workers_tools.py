@@ -303,10 +303,28 @@ def resume_agent_task(
     agent_name_override: str | None = None,
     clarify_rounds: int = 0,
 ) -> JobResult:
-    """Relaunch a failed clarify-phase job with the Q&A history injected.
+    """Relaunch a clarify-phase job with the Q&A history injected.
 
-    Use this when a job exits with code 2 (agent timed out waiting for
-    answers, or the MCP session was interrupted mid-Q&A).  The function:
+    This is the general fallback for continuing a Q&A that the worker could
+    not finish cleanly on its own.  Use it for any of:
+
+    - The job exited with code 2 (``timeout.json``): the agent gave up waiting
+      for answers, or the MCP session was interrupted mid-Q&A.
+    - The agent keeps asking past the rounds you intended to grant (it wrote a
+      ``round_NNN_questions.json`` beyond your budget instead of starting work).
+      Cancel the running job first (``cancel_job``), then resume — optionally
+      with ``clarify_rounds=1`` to grant one more controlled round, or with
+      ``clarify_rounds=0`` + an ``extra_context`` of ``"proceed now"`` to force
+      it to start.
+    - The job reached ``completed`` but the agent only emitted a doubt or a
+      comment in its output and never did the work.  Resume with the missing
+      decision supplied via ``extra_context``.
+
+    It is also the recovery path when a model simply mishandles the file
+    protocol: re-stating the full Q&A history in the prompt sidesteps a worker
+    that failed to read or write the question files correctly.
+
+    The function:
 
     1. Reads the original invocation parameters from ``meta.json``.
     2. Reads all completed Q&A rounds from the job's ``questions/`` directory.

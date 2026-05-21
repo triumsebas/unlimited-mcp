@@ -8,6 +8,11 @@ imports this file and the `/delegate` skill references it — when the tool
 surface or workflow changes, edit *here*, not in those.
 Claude Code users: see CLAUDE.md for the Claude-specific deltas.
 
+> **Repository language — English only.** All files committed to this
+> repository — code, comments, identifiers, commit messages, and
+> Markdown/docs — must be written in English, so the project stays readable
+> for international developers.
+
 ---
 
 ## What this MCP does
@@ -213,12 +218,56 @@ Act on `res['outcome']`:
 **Do NOT poll `get_worker_questions` in a loop.** `await_worker_questions` blocks
 server-side and returns once, regardless of how long the worker takes to explore.
 
+### Never sit through the worker's 600 s timeout
+
+`await_worker_questions` returns the instant the worker writes a new round
+(`questions`), writes `timeout.json` (`timed_out`), writes an empty `[]`
+(`no_questions`), or the job goes terminal (`job_finished`). The only way to
+waste the worker's full `max_total_seconds` (600 s) budget is to stop calling
+`await_worker_questions` and go passive on `await_job` while the worker is
+still waiting for an answer that will never come.
+
+So after you answer the round you intend to be the **last**, make **one** more
+`await_worker_questions` call instead of jumping straight to `await_job`:
+
+| this returns | meaning | do this |
+|---|---|---|
+| `"questions"` (a round beyond your budget) | the agent is insisting past the rounds you granted | don't wait for its timeout — either answer `{"id": N, "answer": "STOP"}` (cheapest; it proceeds with what it knows) or `cancel_job` + `resume_agent_task` |
+| `"no_questions"` / `"wait_expired"` / `"job_finished"` | the agent accepted the answers and is working (or done) | switch to `await_job` — the Q&A phase is over |
+
+### Fallback when the agent won't start work cleanly
+
+Use `resume_agent_task` (it injects the full Q&A history into a fresh prompt)
+whenever the agent can't close the Q&A on its own:
+
+- **Keeps asking past your budget** → `cancel_job(job_id)` (if still running),
+  then `resume_agent_task(job_id, extra_context="<decision or 'proceed now'>")`.
+  Pass `clarify_rounds=1` only if one more controlled round is genuinely
+  warranted; otherwise `0` to force it to start.
+- **Reached `completed` but only emitted a doubt/comment and did no work** —
+  you must judge this by reading `summary`/`raw_output_ref`; the server cannot.
+  Then `resume_agent_task(job_id, extra_context="<the missing answer>")`.
+- **Mishandled the question files** (wrong path, malformed JSON) →
+  `resume_agent_task` re-states the history in plain prompt text, sidestepping
+  the file protocol entirely.
+
+The history is replayed verbatim by default (lossless and cheap). Summarise it
+yourself via `extra_context` only when it is genuinely too long.
+
 **When to use `clarify_rounds`:**
 
 - Use `clarify_rounds >= 1` for design/planning tasks or long tasks where wrong
   assumptions are costly.
 - Use `clarify_rounds=0` (default) for mechanical tasks with fully-specified
   prompts naming exact files, functions, or acceptance criteria.
+
+On open-ended work (a plan, a design, an approach) the worker may use a round
+not to resolve an ambiguity but to **present the options or the direction it
+proposes and ask you to sign off** before it commits — this is expected, not a
+sign the prompt was unclear. Answer by picking an option and adding a
+`reasoning` note; that steers the work. The protocol still gates on
+decision-relevance, so the worker won't burn rounds on free-form commentary or
+choices it can make itself.
 - `timeout_seconds` is auto-extended by `clarify.max_total_seconds` (600 s)
   when `clarify_rounds > 0` — do not add it manually.
 

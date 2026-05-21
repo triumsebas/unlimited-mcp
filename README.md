@@ -89,7 +89,7 @@ How much you save isn't a fixed number — it scales with *your* strategy: the m
 | **Self-configuring** | Add agents, providers, and paths by talking to Claude — no config files, no restarts |
 | **Parallel execution** | Multiple agents run concurrently — tell Claude "start phase 2 and parallelize whatever has no dependencies" and it figures out what can run in parallel and what has to wait |
 | **Server-enforced guardrails** | Path allowlists, dangerous-command confirmation, shell-injection blocking, audit log — enforced by the server, *not* prompt instructions a worker could ignore. A worker physically cannot touch a path outside its allowlist, whatever the prompt says |
-| **Agent clarification rounds** | Agents can ask the orchestrator questions before starting, preventing costly wrong assumptions |
+| **Agent clarification rounds** | Agents can ask the orchestrator questions — or propose options — before starting, preventing costly wrong assumptions ([how it works](CLARIFY.md)) |
 
 ---
 
@@ -379,6 +379,7 @@ care about.
 | [README.md](README.md) | This file — overview, quick start, use cases, roadmap |
 | [ARCHITECTURE.md](ARCHITECTURE.md) | Internal component map, data flow, and the `JobResult` envelope |
 | [PROMPTS.md](PROMPTS.md) | Copy-paste example prompts and delegation flows (dev, sysops) |
+| [CLARIFY.md](CLARIFY.md) | How worker clarification rounds (Q&A) work — three representative uses and the relaunch fallback |
 | [SECURITY.md](SECURITY.md) | Threat model — access model, privilege level, what the safety layer does and does not protect |
 | [AGENTS.md](AGENTS.md) | **Canonical orchestration reference** — decision trees, queues, timeouts, safety, `clarify_rounds`, agent config. Read natively by Codex; imported by CLAUDE.md |
 | [CLAUDE.md](CLAUDE.md) | Claude Code entry point — imports AGENTS.md and adds only the Claude-Code-specific notes |
