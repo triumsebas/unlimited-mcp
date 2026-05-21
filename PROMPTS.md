@@ -124,3 +124,31 @@ Workflow the generated prompt must specify:
 
 The generated prompt must be generic (no real hostnames or site detail), concise, and readable as documentation of this audit pattern.
 ```
+
+### Intelligence + speed benchmark across agents/models (with vs. without clarify)
+
+Same generator style, for putting several agents/models head-to-head over a
+read-only codebase — scored by the orchestrator on quality and timed from
+`JobResult`. Shows how `clarify_rounds` lets you measure not just *what* an
+agent produces but whether *letting it ask questions* improves the result.
+Illustrative example; expand the task battery to taste.
+
+```
+Generate an orchestration prompt for a new session that benchmarks several coding agents/models against each other for both intelligence and speed, with you as the judge. The target repo and the task list are in `local/BENCHMARK.md` (read it after starting).
+
+Hard rule: delegate ALL delegation mechanics to the `unlimited-mcp` skill (Q&A protocol, timeouts, queues, "never solve the tasks yourself"). Only encode the benchmark design below.
+
+Read-only rule (first, verbatim): the target repo is read-only; each agent writes only in its own scratch subfolder; git-check the repo before/after each level and revert if touched.
+
+Design:
+- agent_1, agent_2, agent_3 = the agents/models under test (same CLI, different models X/Y/Z); the orchestrator only judges.
+- A battery of tasks of increasing difficulty (comprehension -> small module+tests -> complex module+tests -> reasoning/bug analysis -> open design with real trade-offs).
+- Two conditions per task, same prompt, only clarify_rounds differs: `noask` (0) and `ask` (2). Run each level's cells in parallel; score; advance. Use workspace='none' and a scratch cwd per cell.
+- For `ask`, answer questions uniformly and neutrally (same for every agent). To make asking actually matter, at least one task must explicitly require stating doubts + a plan with options before solving.
+
+Score each cell 0-5 on correctness, repo-adherence, completeness, quality, and evidence-of-reading (run tests where possible). Measure work time from JobResult (for `ask`, from the last answer to finish).
+
+Deliverable: a SCOREBOARD per task x agent x condition with scores, times, a ranking, and a short per-agent note on whether being allowed to ask improved its result.
+
+Keep the generated prompt generic, concise, and readable as documentation of this benchmarking pattern.
+```
