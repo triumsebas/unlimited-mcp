@@ -3,12 +3,12 @@
   "name": "io.github.triumsebas/unlimited-mcp",
   "title": "unlimited-mcp",
   "description": "MCP server that delegates coding and sysops work to any cheaper agent or local LLM via durable background queues — git-worktree isolation, server-enforced guardrails, and clarification rounds before each job starts.",
-  "version": "0.9.0",
+  "version": "0.9.3",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "unlimited-mcp",
-      "version": "0.9.0",
+      "version": "0.9.3",
       "transport": {
         "type": "stdio"
       }
