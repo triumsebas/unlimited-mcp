@@ -23,7 +23,7 @@ from __future__ import annotations
 import time
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, TypeAlias
 
 from unlimited_mcp.jobs.result import ErrorBlock, JobResult
 from unlimited_mcp.jobs.runner_local import LocalRunner
@@ -33,6 +33,11 @@ from unlimited_mcp.safety.argv_check import SafetyChecker, SafetyDecision
 
 if TYPE_CHECKING:
     from unlimited_mcp.agents.runner import AgentRunner
+    from unlimited_mcp.jobs.runner_remote import RemoteRunner
+
+# Any runner that exposes submit/get_result — the local in-process runner or a
+# remote SSH-backed one. Tools dispatch duck-typed across both.
+AnyRunner: TypeAlias = "LocalRunner | RemoteRunner"
 
 _POLL_INTERVAL = 5.0
 
@@ -46,7 +51,7 @@ def run_command(
     argv: list[str],
     *,
     safety: SafetyChecker,
-    runner: LocalRunner,
+    runner: AnyRunner,
     cwd: str | None = None,
     env_extra: dict[str, str] | None = None,
     timeout_seconds: int = 600,
@@ -57,7 +62,9 @@ def run_command(
 ) -> JobResult:
     """Apply the safety pipeline to *argv* then submit to :class:`LocalRunner`."""
     decision = safety.check_run_command(
-        argv, cwd=cwd, confirm_token=confirm_token,
+        argv,
+        cwd=cwd,
+        confirm_token=confirm_token,
         extra_allowed_roots=extra_allowed_roots,
     )
     if not decision.allowed:
@@ -113,7 +120,7 @@ def run_shell(
     script: str,
     *,
     safety: SafetyChecker,
-    runner: LocalRunner,
+    runner: AnyRunner,
     interpreter: str = "bash",
     i_understand_this_runs_a_shell_script: bool = False,
     cwd: str | None = None,
@@ -171,7 +178,7 @@ def run_and_summarize(
     argv: list[str],
     *,
     safety: SafetyChecker,
-    runner: LocalRunner,
+    runner: AnyRunner,
     provider: Provider | None = None,
     model: str | None = None,
     cwd: str | None = None,

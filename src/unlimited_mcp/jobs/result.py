@@ -106,6 +106,48 @@ class ErrorBlock(_Strict):
     retryable: bool = False
 
 
+QualityGateStatus = Literal["PASS", "NOPASS", "NOTDETECTED", "MISSINGDEP"]
+
+
+class QualityGateIssue(_Strict):
+    """One lint/type-check finding on a changed file.
+
+    Concrete enough that the orchestrator can act without re-running anything:
+    fix the file itself, or hand the issues back to the worker via
+    ``resume_agent_task``.
+    """
+
+    file: str
+    line: int | None = None
+    col: int | None = None
+    rule: str | None = None  # e.g. "F401"
+    message: str
+    tool: str  # "ruff" | "mypy" | "eslint" | "tsc" | "go vet" | "clippy" | ...
+
+
+class QualityGateResult(_Strict):
+    """Outcome of the post-job lint + type-check on the worker's changed files.
+
+    Status meanings:
+
+    * ``PASS``        — checks ran and the changed files are clean.
+    * ``NOPASS``      — checks ran and found issues (see ``issues``).
+    * ``NOTDETECTED`` — no recognized language marker among the changed files;
+      the gate was skipped (not a failure).
+    * ``MISSINGDEP``  — a required tool is absent from the worker PATH (see
+      ``missing_deps``); the affected checks were skipped.
+    """
+
+    status: QualityGateStatus
+    language: str | None = None
+    tools_run: list[str] = Field(default_factory=list)
+    auto_fixed: list[str] = Field(default_factory=list)
+    issues: list[QualityGateIssue] = Field(default_factory=list)
+    missing_deps: list[str] = Field(default_factory=list)
+    report_ref: str | None = None  # path to the full raw linter output
+    hint: str | None = None  # actionable next step for the orchestrator
+
+
 class JobResult(_Strict):
     """Universal tool output. Sync tools complete in one call; background
     tools return ``status="queued"``/``"running"`` first and finalize via
@@ -115,10 +157,10 @@ class JobResult(_Strict):
     job_id: str
     status: JobStatus
     tool: str
-    tag: str | None = None                # opaque orchestrator label; filter with list_jobs(tag=...)
+    tag: str | None = None  # opaque orchestrator label; filter with list_jobs(tag=...)
     started_at: datetime
     finished_at: datetime | None = None
-    seen_at: datetime | None = None       # stamped by get_job_result on first read of a terminal job
+    seen_at: datetime | None = None  # stamped by get_job_result on first read of a terminal job
     duration_ms: int | None = None
 
     summary: str | None = None
@@ -128,6 +170,7 @@ class JobResult(_Strict):
     worktree_path: str | None = None
     commands_run: list[CommandRecord] = Field(default_factory=list)
     tests: TestSummary | None = None
+    quality_gate: QualityGateResult | None = None
     artifacts: list[Artifact] = Field(default_factory=list)
 
     warnings: list[JobWarning] = Field(default_factory=list)

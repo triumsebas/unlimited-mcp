@@ -27,16 +27,17 @@ if provided.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import logging
 import subprocess
 import threading
-import time
 from collections.abc import Callable
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import cast
 
-from unlimited_mcp.hosts.base import Host, RunOutput
+from unlimited_mcp.hosts.base import Host, RemoteHost, RunOutput
 from unlimited_mcp.jobs.result import CommandRecord, ErrorBlock, JobResult, JobStatus
 from unlimited_mcp.jobs.store import JobStore
 
@@ -60,7 +61,9 @@ class RemoteRunner:
     """
 
     def __init__(self, host: Host, store: JobStore) -> None:
-        self._host = host
+        # RemoteRunner is only constructed for SSH-backed hosts, which provide
+        # stdin piping and SFTP on top of the base Host surface.
+        self._host = cast("RemoteHost", host)
         self._store = store
         self._cancelled: set[str] = set()
         self._watchers: dict[str, threading.Thread] = {}
@@ -83,6 +86,8 @@ class RemoteRunner:
         tool: str = "run_command",
         branch: str | None = None,
         worktree_path: str | None = None,
+        worktree_base: str | None = None,  # postprocess is local-only (v1); accepted, unused
+        quality_gate_enabled: bool = True,  # postprocess is local-only (v1); accepted, unused
         cleanup_fn: Callable[[], None] | None = None,
         stdin_content: str | None = None,
         prompt_file_content: str | None = None,
@@ -90,6 +95,7 @@ class RemoteRunner:
         remote_questions_dir: str | None = None,
     ) -> JobResult:
         """Submit *argv* to the remote host and return immediately with ``status="running"``."""
+        del worktree_base, quality_gate_enabled  # local-only postprocess; not run remotely
 
         if idempotency_key:
             existing_id = self._idempotency.get(idempotency_key)
@@ -106,6 +112,7 @@ class RemoteRunner:
         remote_prompt_file: str | None = None
         if prompt_file_content is not None:
             from unlimited_mcp.hosts.ssh import SshHost as _SshHost
+
             if not isinstance(self._host, _SshHost):
                 raise NotImplementedError(
                     "prompt_file_content requires an SshHost with SFTP support."
@@ -158,9 +165,21 @@ class RemoteRunner:
 
         t = threading.Thread(
             target=self._watch,
-            args=(job_id, argv, cwd, env_extra, timeout_seconds, tool,
-                  started_at, branch, worktree_path, cleanup_fn,
-                  stdin_bytes, remote_prompt_file, remote_questions_dir),
+            args=(
+                job_id,
+                argv,
+                cwd,
+                env_extra,
+                timeout_seconds,
+                tool,
+                started_at,
+                branch,
+                worktree_path,
+                cleanup_fn,
+                stdin_bytes,
+                remote_prompt_file,
+                remote_questions_dir,
+            ),
             daemon=True,
             name=f"remote-watcher-{job_id}",
         )
@@ -267,7 +286,9 @@ class RemoteRunner:
             )
         except subprocess.TimeoutExpired:
             timed_out = True
-            log.warning("Remote job %s timed out after %ds on %s", job_id, timeout_seconds, self._host.name)
+            log.warning(
+                "Remote job %s timed out after %ds on %s", job_id, timeout_seconds, self._host.name
+            )
         except Exception as exc:
             log.error("Remote job %s failed on %s: %s", job_id, self._host.name, exc)
             self._write_failed(job_id, tool, started_at, str(exc), branch, worktree_path)
@@ -313,7 +334,10 @@ class RemoteRunner:
             if not ok:
                 stderr_tail = self._store.stderr_path(job_id)
                 last_lines = (
-                    stderr_tail.read_bytes()[-500:].decode("utf-8", errors="replace").strip().splitlines()
+                    stderr_tail.read_bytes()[-500:]
+                    .decode("utf-8", errors="replace")
+                    .strip()
+                    .splitlines()
                     if stderr_tail.exists()
                     else []
                 )
@@ -338,18 +362,16 @@ class RemoteRunner:
         self._store.write_result(result)
 
         if remote_prompt_file is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._host.run(["rm", "-f", remote_prompt_file])
-            except Exception:
-                pass
 
         if cleanup_fn is not None:
             _safe_call(cleanup_fn)
 
-    def _clarify_loop(
-        self, job_id: str, remote_questions_dir: str, stop: threading.Event
-    ) -> None:
-        log.info("RemoteRunner: clarify sync started for job %s at %s", job_id, remote_questions_dir)
+    def _clarify_loop(self, job_id: str, remote_questions_dir: str, stop: threading.Event) -> None:
+        log.info(
+            "RemoteRunner: clarify sync started for job %s at %s", job_id, remote_questions_dir
+        )
         while not stop.wait(timeout=3.0):
             self._sync_clarify(job_id, remote_questions_dir)
         # One final sync after the job finishes to capture any last questions.
@@ -368,7 +390,11 @@ class RemoteRunner:
 
         try:
             out = self._host.run(
-                ["sh", "-c", f"ls {remote_questions_dir}/round_*_questions.json 2>/dev/null || true"]
+                [
+                    "sh",
+                    "-c",
+                    f"ls {remote_questions_dir}/round_*_questions.json 2>/dev/null || true",
+                ]
             )
             remote_files = [p.strip() for p in out.stdout.decode().splitlines() if p.strip()]
         except Exception as exc:
@@ -414,27 +440,27 @@ class RemoteRunner:
         if job_id in self._cancelled:
             return
         now = datetime.now(UTC)
-        self._store.write_result(JobResult(
-            ok=False,
-            job_id=job_id,
-            status="failed",
-            tool=tool,
-            started_at=started_at,
-            finished_at=now,
-            duration_ms=int((now - started_at).total_seconds() * 1000),
-            summary=message[:500],
-            error=ErrorBlock(
-                code="REMOTE_EXEC_ERROR",
-                message=message,
-                hint=f"Check SSH connectivity to {self._host.name}.",
-            ),
-            branch=branch,
-            worktree_path=worktree_path,
-        ))
+        self._store.write_result(
+            JobResult(
+                ok=False,
+                job_id=job_id,
+                status="failed",
+                tool=tool,
+                started_at=started_at,
+                finished_at=now,
+                duration_ms=int((now - started_at).total_seconds() * 1000),
+                summary=message[:500],
+                error=ErrorBlock(
+                    code="REMOTE_EXEC_ERROR",
+                    message=message,
+                    hint=f"Check SSH connectivity to {self._host.name}.",
+                ),
+                branch=branch,
+                worktree_path=worktree_path,
+            )
+        )
 
 
 def _safe_call(fn: Callable[[], None]) -> None:
-    try:
+    with contextlib.suppress(Exception):
         fn()
-    except Exception:
-        pass

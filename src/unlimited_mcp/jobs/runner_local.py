@@ -120,6 +120,8 @@ class LocalRunner:
         tool: str = "run_command",
         branch: str | None = None,
         worktree_path: str | None = None,
+        worktree_base: str | None = None,
+        quality_gate_enabled: bool = True,
         cleanup_fn: Callable[[], None] | None = None,
         stdin_content: str | None = None,
         prompt_file_content: str | None = None,
@@ -190,7 +192,7 @@ class LocalRunner:
         )
         # Close our handle to stdin.txt after Popen (child has its own fd).
         if stdin_content is not None and hasattr(stdin_fh, "close"):
-            stdin_fh.close()  # type: ignore[union-attr]
+            stdin_fh.close()
 
         deadline = started_at + timedelta(seconds=timeout_seconds)
         _write_state(
@@ -223,8 +225,20 @@ class LocalRunner:
 
         t = threading.Thread(
             target=self._watch,
-            args=(job_id, proc, stdout_fh, stderr_fh, started_at, timeout_seconds, tool,
-                  branch, worktree_path, cleanup_fn),
+            args=(
+                job_id,
+                proc,
+                stdout_fh,
+                stderr_fh,
+                started_at,
+                timeout_seconds,
+                tool,
+                branch,
+                worktree_path,
+                cleanup_fn,
+                worktree_base,
+                quality_gate_enabled,
+            ),
             daemon=True,
             name=f"watcher-{job_id}",
         )
@@ -484,6 +498,8 @@ class LocalRunner:
         branch: str | None = None,
         worktree_path: str | None = None,
         cleanup_fn: Callable[[], None] | None = None,
+        worktree_base: str | None = None,
+        quality_gate_enabled: bool = True,
     ) -> None:
         timed_out = False
         try:
@@ -521,6 +537,18 @@ class LocalRunner:
 
         summary = self._summary_from_logs(job_id, status, exit_code, timed_out, timeout_seconds)
 
+        # Post-process while the worktree still exists (cleanup runs below):
+        # populate changed_files, run the quality gate, detect file conflicts.
+        from unlimited_mcp.jobs.postprocess import run_postprocess
+
+        post = run_postprocess(
+            job_id,
+            worktree_path,
+            worktree_base,
+            self._store,
+            quality_gate_enabled=quality_gate_enabled,
+        )
+
         # B4: serialize the final write against cancel(). Re-check cancellation
         # inside the lock so a cancel can't be lost-updated by this write.
         with self._lock_for(job_id):
@@ -540,6 +568,9 @@ class LocalRunner:
                     ],
                     branch=branch,
                     worktree_path=worktree_path,
+                    changed_files=post.changed_files,
+                    quality_gate=post.quality_gate,
+                    warnings=post.warnings,
                 )
                 self._store.write_result(result)
         if cleanup_fn is not None:

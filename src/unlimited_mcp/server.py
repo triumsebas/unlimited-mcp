@@ -33,61 +33,96 @@ from mcp.server.fastmcp import FastMCP
 from unlimited_mcp.agents.runner import AgentRunner
 from unlimited_mcp.config.knowledge import KnowledgeStore
 from unlimited_mcp.config.loader import ConfigStore
+from unlimited_mcp.config.schema import ProviderConfig
 from unlimited_mcp.hosts.registry import HostRegistry
 from unlimited_mcp.jobs.result import JobResult
 from unlimited_mcp.jobs.runner_local import LocalRunner
 from unlimited_mcp.jobs.runner_remote import RemoteRunner
 from unlimited_mcp.jobs.store import JobStore
+from unlimited_mcp.observability.log_query import query_logs as _query_logs
 from unlimited_mcp.paths import (
     config_path,
     jobs_dir,
     knowledge_local_path,
     state_dir,
 )
-from unlimited_mcp.workspace.manager import WorkspaceManager
 from unlimited_mcp.providers.base import Provider
 from unlimited_mcp.providers.openai_compat import OpenAICompatProvider
-from unlimited_mcp.config.schema import ProviderConfig
 from unlimited_mcp.safety.argv_check import SafetyChecker
 from unlimited_mcp.tools.config_tools import (
     add_agent as _add_agent,
+)
+from unlimited_mcp.tools.config_tools import (
     add_allowed_root as _add_allowed_root,
+)
+from unlimited_mcp.tools.config_tools import (
     add_deny_path as _add_deny_path,
+)
+from unlimited_mcp.tools.config_tools import (
     add_host as _add_host,
+)
+from unlimited_mcp.tools.config_tools import (
     add_provider as _add_provider,
+)
+from unlimited_mcp.tools.config_tools import (
     add_queue as _add_queue,
+)
+from unlimited_mcp.tools.config_tools import (
     configure_agent as _configure_agent,
+)
+from unlimited_mcp.tools.config_tools import (
     configure_safety as _configure_safety,
+)
+from unlimited_mcp.tools.config_tools import (
     list_capabilities as _list_capabilities,
+)
+from unlimited_mcp.tools.config_tools import (
     list_safety_policy as _list_safety_policy,
+)
+from unlimited_mcp.tools.config_tools import (
     remove_allowed_root as _remove_allowed_root,
+)
+from unlimited_mcp.tools.config_tools import (
     remove_deny_path as _remove_deny_path,
+)
+from unlimited_mcp.tools.config_tools import (
     remove_entry as _remove_entry,
+)
+from unlimited_mcp.tools.config_tools import (
     ssh_trust_host as _ssh_trust_host,
 )
 from unlimited_mcp.tools.execution import delegate_to_agent as _delegate_to_agent
 from unlimited_mcp.tools.execution import run_and_summarize as _run_and_summarize
 from unlimited_mcp.tools.execution import run_command as _run_command
 from unlimited_mcp.tools.execution import run_shell as _run_shell
-from unlimited_mcp.observability.log_query import query_logs as _query_logs
+from unlimited_mcp.tools.jobs import await_job as _await_job
 from unlimited_mcp.tools.jobs import cancel_job as _cancel_job
 from unlimited_mcp.tools.jobs import cleanup_branches as _cleanup_branches
 from unlimited_mcp.tools.jobs import cleanup_jobs as _cleanup_jobs
-from unlimited_mcp.tools.jobs import await_job as _await_job
+from unlimited_mcp.tools.jobs import detect_conflicts as _detect_conflicts
 from unlimited_mcp.tools.jobs import get_job_result as _get_job_result
 from unlimited_mcp.tools.jobs import get_job_status as _get_job_status
 from unlimited_mcp.tools.jobs import list_jobs as _list_jobs
 from unlimited_mcp.tools.jobs import submit_task as _submit_task
 from unlimited_mcp.tools.knowledge_tools import (
     lookup_agent_cli as _lookup_agent_cli,
+)
+from unlimited_mcp.tools.knowledge_tools import (
     register_agent_knowledge as _register_agent_knowledge,
 )
 from unlimited_mcp.tools.workers_tools import (
     answer_worker_questions as _answer_worker_questions,
+)
+from unlimited_mcp.tools.workers_tools import (
     await_worker_questions as _await_worker_questions,
+)
+from unlimited_mcp.tools.workers_tools import (
     get_worker_questions as _get_worker_questions,
+)
+from unlimited_mcp.tools.workers_tools import (
     resume_agent_task as _resume_agent_task,
 )
+from unlimited_mcp.workspace.manager import WorkspaceManager
 
 _REPO_KNOWLEDGE_PATH = Path(__file__).parent / "knowledge.yaml"
 
@@ -97,10 +132,10 @@ _SERVER_BUILD_ID = "174dfe4c-16c4-412a-aafd-f1a32ab213f6"
 
 
 _OPENAI_COMPAT_DEFAULT_URLS: dict[str, str] = {
-    "ollama":     "http://localhost:11434/v1",
-    "mlx_lm":     "http://localhost:8080/v1",
-    "gemini":     "https://generativelanguage.googleapis.com/v1beta/openai/",
-    "groq":       "https://api.groq.com/openai/v1",
+    "ollama": "http://localhost:11434/v1",
+    "mlx_lm": "http://localhost:8080/v1",
+    "gemini": "https://generativelanguage.googleapis.com/v1beta/openai/",
+    "groq": "https://api.groq.com/openai/v1",
     "openrouter": "https://openrouter.ai/api/v1",
 }
 
@@ -112,10 +147,7 @@ _OPENAI_COMPAT_TYPES = frozenset(
 def _build_provider(name: str, cfg: ProviderConfig) -> Provider | None:
     """Instantiate a Provider from a ProviderConfig entry."""
     if cfg.type in _OPENAI_COMPAT_TYPES:
-        api_key = (
-            cfg.api_key
-            or (os.environ.get(cfg.api_key_env, "") if cfg.api_key_env else "")
-        )
+        api_key = cfg.api_key or (os.environ.get(cfg.api_key_env, "") if cfg.api_key_env else "")
         base_url = (
             os.environ.get(cfg.api_base_env, cfg.base_url or "")
             if cfg.api_base_env
@@ -179,41 +211,45 @@ def make_server(
     # server works out of the box even without an explicit queues: block.
     _cfg_snapshot = cfg_store.get()
     _queue_defaults = {
-        "ts":        {"type": "local_ts", "slots": 4, "socket": None, "host": None},
+        "ts": {"type": "local_ts", "slots": 4, "socket": None, "host": None},
         "ts_serial": {"type": "local_ts", "slots": 1, "socket": None, "host": None},
     }
-    _queue_cfgs: dict[str, object] = {}
+    _queue_cfgs: dict[str, dict[str, Any]] = {}
     for _qname, _qdef in _queue_defaults.items():
         _qcfg = _cfg_snapshot.queues.get(_qname)
         _queue_cfgs[_qname] = {
-            "type":   _qcfg.type   if _qcfg else _qdef["type"],
-            "slots":  _qcfg.slots  if _qcfg else _qdef["slots"],
+            "type": _qcfg.type if _qcfg else _qdef["type"],
+            "slots": _qcfg.slots if _qcfg else _qdef["slots"],
             "socket": _qcfg.socket if _qcfg else _qdef["socket"],
-            "host":   _qcfg.host   if _qcfg else _qdef["host"],
+            "host": _qcfg.host if _qcfg else _qdef["host"],
         }
     # Also pick up any extra named queues defined in config.
     for _qname, _qcfg in _cfg_snapshot.queues.items():
         if _qname not in _queue_cfgs:
             _queue_cfgs[_qname] = {
-                "type":   _qcfg.type,
-                "slots":  _qcfg.slots,
+                "type": _qcfg.type,
+                "slots": _qcfg.slots,
                 "socket": _qcfg.socket,
-                "host":   _qcfg.host,
+                "host": _qcfg.host,
             }
 
     _ts_runners: dict[str, object] = {}
     try:
-        from unlimited_mcp.jobs.runner_ts import TsRunner
-        from unlimited_mcp.jobs.runner_remote_ts import RemoteTsRunner as _RemoteTsRunner
         import logging as _lg
+
+        from unlimited_mcp.jobs.runner_remote_ts import RemoteTsRunner as _RemoteTsRunner
+        from unlimited_mcp.jobs.runner_ts import TsRunner
+
         _ql = _lg.getLogger(__name__)
         for _qname, _qopt in _queue_cfgs.items():
-            _qtype = _qopt["type"]  # type: ignore[index]
+            _qtype = _qopt["type"]
             if _qtype == "local_ts":
-                _sock = Path(_qopt["socket"]) if _qopt["socket"] else state_dir() / f"{_qname}.sock"  # type: ignore[index]
-                _ts_runners[_qname] = TsRunner(job_store, ts_socket=_sock, max_slots=int(_qopt["slots"]))  # type: ignore[index]
+                _sock = Path(_qopt["socket"]) if _qopt["socket"] else state_dir() / f"{_qname}.sock"
+                _ts_runners[_qname] = TsRunner(
+                    job_store, ts_socket=_sock, max_slots=int(_qopt["slots"])
+                )
             elif _qtype == "remote_ts":
-                _host_name = _qopt.get("host")  # type: ignore[union-attr]
+                _host_name = _qopt.get("host")
                 if not _host_name:
                     _ql.warning("Queue %r: remote_ts requires a 'host' field — skipping.", _qname)
                     continue
@@ -221,28 +257,32 @@ def make_server(
                 if _host_cfg is None or _host_cfg.type != "ssh":
                     _ql.warning(
                         "Queue %r: host %r must be type 'ssh' for remote_ts — skipping.",
-                        _qname, _host_name,
+                        _qname,
+                        _host_name,
                     )
                     continue
                 try:
                     _ssh_host = host_registry.get(_host_name)
                 except KeyError:
-                    _ql.warning("Queue %r: host %r not found in config — skipping.", _qname, _host_name)
+                    _ql.warning(
+                        "Queue %r: host %r not found in config — skipping.", _qname, _host_name
+                    )
                     continue
                 _ts_runners[_qname] = _RemoteTsRunner(
-                    _ssh_host,  # type: ignore[arg-type]
+                    _ssh_host,  # type: ignore[arg-type]  # narrowed by the .type=="ssh" check above
                     job_store,
-                    ts_socket=_qopt.get("socket"),  # type: ignore[union-attr]
-                    max_slots=int(_qopt["slots"]),  # type: ignore[index]
+                    ts_socket=_qopt.get("socket"),
+                    max_slots=int(_qopt["slots"]),
                 )
             else:
                 _ql.warning("Queue %r has unsupported type %r — skipping.", _qname, _qtype)
     except Exception as _exc:
         import logging as _lg
+
         _lg.getLogger(__name__).warning("Runner init error: %s", _exc)
 
-    ts_runner = _ts_runners.get("ts")
-    ts_serial_runner = _ts_runners.get("ts_serial")
+    _ts_runners.get("ts")
+    _ts_runners.get("ts_serial")
     # Pass stores (not snapshots) so config changes made via MCP tools
     # (add_agent, add_allowed_root, …) are visible on the next tool call.
     safety = SafetyChecker(cfg_store, kn_store)
@@ -272,7 +312,7 @@ def make_server(
         if cwd is not None or exec_host == "local" or host_registry is None:
             return cwd
         try:
-            host_cfg = host_registry.get(exec_host)._config  # type: ignore[union-attr]
+            host_cfg = getattr(host_registry.get(exec_host), "_config", None)
             return getattr(host_cfg, "repos_root", None) or cwd
         except Exception:
             return cwd
@@ -286,7 +326,7 @@ def make_server(
         if exec_host == "local" or host_registry is None:
             return None
         try:
-            host_cfg = host_registry.get(exec_host)._config  # type: ignore[union-attr]
+            host_cfg = getattr(host_registry.get(exec_host), "_config", None)
             extras: list[str] = list(getattr(host_cfg, "allowed_roots", None) or [])
             repos_root = getattr(host_cfg, "repos_root", None)
             if repos_root and repos_root not in extras:
@@ -411,7 +451,7 @@ def make_server(
             confirm_token=confirm_token,
         )
 
-    def _pick_runner(queue: str) -> object:
+    def _pick_runner(queue: str) -> Any:
         """Return the runner for the requested queue.
 
         'local'          → in-process LocalRunner (default).
@@ -426,11 +466,13 @@ def make_server(
         if queue != "local":
             ts_r = _ts_runners.get(queue)
             if ts_r is not None:
-                return ts_r  # type: ignore[return-value]
+                return ts_r
             import logging as _log
+
             _log.getLogger(__name__).warning(
                 "Queue %r unavailable — falling back to local runner. "
-                "Check task-spooler is installed: brew install task-spooler", queue,
+                "Check task-spooler is installed: brew install task-spooler",
+                queue,
             )
         return runner
 
@@ -491,11 +533,7 @@ def make_server(
         # leave runner_override None so AgentRunner honours the agent's own
         # exec_host field (a forced "local" runner here would shadow it).
         resolved_host = exec_host  # may be None → AgentRunner reads agent_cfg.exec_host
-        runner_override = (
-            None
-            if (resolved_host or queue == "local")
-            else _pick_runner(queue)
-        )
+        runner_override = None if (resolved_host or queue == "local") else _pick_runner(queue)
 
         # Resolve effective exec_host for repos_root fallback: prefer explicit
         # override, then agent config, then "local".
@@ -503,7 +541,9 @@ def make_server(
             _effective_host = resolved_host
         else:
             _agent_cfg = cfg_store.get().agents.get(agent_name)
-            _effective_host = (_agent_cfg.exec_host if _agent_cfg and _agent_cfg.exec_host else None) or "local"
+            _effective_host = (
+                _agent_cfg.exec_host if _agent_cfg and _agent_cfg.exec_host else None
+            ) or "local"
 
         return _delegate_to_agent(
             agent_name,
@@ -638,6 +678,21 @@ def make_server(
         return _cancel_job(job_id, runner=runner)
 
     @app.tool()
+    def detect_conflicts(window_seconds: int = 1800) -> dict[str, Any]:
+        """Report coding jobs whose changed files overlap — run before merging branches.
+
+        Call this when several coding jobs have run in parallel (e.g. multiple
+        delegate_to_agent calls on the ts queue). It cross-references the
+        changed_files of every active job and every job finished within the last
+        window_seconds, and lists the pairs that touch the same files — the
+        classic cause of merge conflicts and lost work in multi-agent coding.
+
+        Returns {"conflicts": [{"jobs": [id_a, id_b], "files": [...]}], "checked": N};
+        an empty conflicts list means no overlaps.
+        """
+        return _detect_conflicts(runner=runner, window_seconds=window_seconds)
+
+    @app.tool()
     def cleanup_jobs(
         older_than: str = "7d",
         keep_unseen: bool = True,
@@ -651,8 +706,9 @@ def make_server(
         dry_run: when True (default), reports what would be removed without
           deleting. Set to False to execute.
         """
-        return _cleanup_jobs(runner=runner, older_than=older_than,
-                             keep_unseen=keep_unseen, dry_run=dry_run)
+        return _cleanup_jobs(
+            runner=runner, older_than=older_than, keep_unseen=keep_unseen, dry_run=dry_run
+        )
 
     @app.tool()
     def cleanup_branches(
@@ -671,7 +727,10 @@ def make_server(
         dry_run: when True (default), lists without deleting.
         """
         return _cleanup_branches(
-            cwd, prefix=prefix, merged_into=merged_into, dry_run=dry_run,
+            cwd,
+            prefix=prefix,
+            merged_into=merged_into,
+            dry_run=dry_run,
             work_dir=state_dir() / "work",
         )
 
@@ -714,6 +773,7 @@ def make_server(
                     # Count lines that would be removed without touching the file
                     import json as _json
                     from datetime import UTC, datetime, timedelta
+
                     cutoff = datetime.now(UTC) - timedelta(days=30)
                     count = 0
                     if path.exists():
@@ -732,19 +792,25 @@ def make_server(
                                 pass
                     log_report[name] = {"would_remove_lines": count}
                 else:
-                    removed = trim_jsonl(path, max_age_days=30)
-                    log_report[name] = {"removed_lines": removed}
+                    removed_lines = trim_jsonl(path, max_age_days=30)
+                    log_report[name] = {"removed_lines": removed_lines}
             report["logs"] = log_report
 
         if tmp:
             tmp_dir = Path("/tmp/unlimited-mcp")
             if dry_run:
                 import time as _time
+
                 cutoff_ts = _time.time() - 7 * 86400
-                would_remove = [
-                    str(c) for c in tmp_dir.iterdir()
-                    if tmp_dir.exists() and c.stat().st_mtime < cutoff_ts
-                ] if tmp_dir.exists() else []
+                would_remove = (
+                    [
+                        str(c)
+                        for c in tmp_dir.iterdir()
+                        if tmp_dir.exists() and c.stat().st_mtime < cutoff_ts
+                    ]
+                    if tmp_dir.exists()
+                    else []
+                )
                 report["tmp"] = {"would_remove": would_remove, "count": len(would_remove)}
             else:
                 removed = cleanup_tmp(tmp_dir, max_age_days=7)
@@ -764,8 +830,8 @@ def make_server(
                         content = git_file.read_text(encoding="utf-8", errors="replace").strip()
                         if not content.startswith("gitdir:"):
                             continue
-                        from pathlib import PurePosixPath as _PP
-                        gitdir = Path(content[len("gitdir:"):].strip())
+
+                        gitdir = Path(content[len("gitdir:") :].strip())
                         if not gitdir.parent.parent.exists():
                             would_remove.append(str(entry))
                 report["worktrees"] = {"would_remove": would_remove, "count": len(would_remove)}
@@ -823,8 +889,9 @@ def make_server(
             if repos:
                 repo_names = repos
             elif host_repos_root:
-                ls_out = host.run(["find", host_repos_root, "-maxdepth", "1",
-                                   "-mindepth", "1", "-type", "d"])
+                ls_out = host.run(
+                    ["find", host_repos_root, "-maxdepth", "1", "-mindepth", "1", "-type", "d"]
+                )
                 if ls_out.exit_code == 0:
                     repo_names = [
                         line.rstrip("/").split("/")[-1]
@@ -836,33 +903,53 @@ def make_server(
                 repo_path = f"{host_repos_root}/{repo_name}" if host_repos_root else repo_name
                 # List branches
                 list_out = host.run(
-                    ["git", "-C", repo_path, "branch",
-                     "--format=%(refname:short)", f"--merged={merged_into}"],
+                    [
+                        "git",
+                        "-C",
+                        repo_path,
+                        "branch",
+                        "--format=%(refname:short)",
+                        f"--merged={merged_into}",
+                    ],
                 )
                 if list_out.exit_code != 0:
                     branch_report[repo_name] = {"error": list_out.stderr.decode().strip()}
                     continue
                 candidates = [
-                    b.strip() for b in list_out.stdout.decode().splitlines()
+                    b.strip()
+                    for b in list_out.stdout.decode().splitlines()
                     if b.strip().startswith("unlimited-mcp/") and b.strip() != merged_into
                 ]
                 if dry_run:
-                    branch_report[repo_name] = {"would_delete": candidates, "count": len(candidates)}
+                    branch_report[repo_name] = {
+                        "would_delete": candidates,
+                        "count": len(candidates),
+                    }
                 else:
-                    deleted, failed = [], []
+                    deleted: list[str] = []
+                    failed: list[str] = []
                     for branch in candidates:
                         del_out = host.run(["git", "-C", repo_path, "branch", "-d", branch])
                         (deleted if del_out.exit_code == 0 else failed).append(branch)
-                    branch_report[repo_name] = {"deleted": deleted, "failed": failed,
-                                                "count": len(deleted)}
+                    branch_report[repo_name] = {
+                        "deleted": deleted,
+                        "failed": failed,
+                        "count": len(deleted),
+                    }
 
             report["branches"] = branch_report
 
         # ---- ts output files -------------------------------------------------
         if ts_output:
             find_cmd = [
-                "find", "/tmp", "-maxdepth", "1", "-name", "ts-out.*",
-                "-mtime", f"+{older_than_days}",
+                "find",
+                "/tmp",
+                "-maxdepth",
+                "1",
+                "-name",
+                "ts-out.*",
+                "-mtime",
+                f"+{older_than_days}",
             ]
             find_out = host.run(find_cmd)
             ts_files = [f.strip() for f in find_out.stdout.decode().splitlines() if f.strip()]
@@ -882,12 +969,22 @@ def make_server(
         # ---- remote /tmp/unlimited-mcp ---------------------------------------
         if tmp:
             remote_tmp = "/tmp/unlimited-mcp"
-            find_tmp_out = host.run([
-                "find", remote_tmp, "-maxdepth", "1", "-mindepth", "1",
-                "-mtime", f"+{older_than_days}",
-            ])
+            find_tmp_out = host.run(
+                [
+                    "find",
+                    remote_tmp,
+                    "-maxdepth",
+                    "1",
+                    "-mindepth",
+                    "1",
+                    "-mtime",
+                    f"+{older_than_days}",
+                ]
+            )
             if find_tmp_out.exit_code == 0:
-                tmp_items = [f.strip() for f in find_tmp_out.stdout.decode().splitlines() if f.strip()]
+                tmp_items = [
+                    f.strip() for f in find_tmp_out.stdout.decode().splitlines() if f.strip()
+                ]
                 if dry_run:
                     report["tmp"] = {"would_remove": tmp_items, "count": len(tmp_items)}
                 else:
@@ -895,7 +992,9 @@ def make_server(
                         rm_tmp = host.run(["rm", "-rf", *tmp_items])
                         report["tmp"] = {
                             "removed": tmp_items if rm_tmp.exit_code == 0 else [],
-                            "error": rm_tmp.stderr.decode().strip() if rm_tmp.exit_code != 0 else None,
+                            "error": rm_tmp.stderr.decode().strip()
+                            if rm_tmp.exit_code != 0
+                            else None,
                             "count": len(tmp_items),
                         }
                     else:
@@ -944,7 +1043,8 @@ def make_server(
 
         Returns {ok, total_matched, returned, truncated, sources_read, entries}.
         """
-        from unlimited_mcp.paths import audit_dir, logs_dir
+        from unlimited_mcp.paths import audit_dir
+
         return _query_logs(
             logs_dir(),
             audit_dir(),
@@ -975,8 +1075,12 @@ def make_server(
                    api_key_env='OPENCODE_API_KEY')
         """
         return _add_provider(
-            name, provider_type, model,
-            base_url=base_url, api_key_env=api_key_env, tags=tags,
+            name,
+            provider_type,
+            model,
+            base_url=base_url,
+            api_key_env=api_key_env,
+            tags=tags,
             config_store=cfg_store,
         )
 
@@ -998,15 +1102,19 @@ def make_server(
         Use lookup_agent_cli(cli) first to see available params and install hints.
         """
         return _add_agent(
-            name, cli,
-            tags=tags, suitable_for=suitable_for, workspace=workspace, params=params,
+            name,
+            cli,
+            tags=tags,
+            suitable_for=suitable_for,
+            workspace=workspace,
+            params=params,
             config_store=cfg_store,
         )
 
     @app.tool()
     def configure_agent(
         name: str,
-        set: dict[str, Any] | None = None,  # noqa: A002
+        set: dict[str, Any] | None = None,
         unset: list[str] | None = None,
     ) -> dict[str, Any]:
         """Update params or top-level fields on an existing agent.
@@ -1083,7 +1191,9 @@ def make_server(
         Example: add_host('gpu_server', host='192.168.1.100', user='ubuntu')
         """
         return _add_host(
-            name, host, user,
+            name,
+            host,
+            user,
             port=port,
             key_file=key_file,
             key_passphrase_env=key_passphrase_env,
@@ -1209,9 +1319,12 @@ def make_server(
           'hermes --task {prompt!q} --workspace {cwd}'
         """
         return _register_agent_knowledge(
-            name, command_template,
-            docs_url=docs_url, install_hint=install_hint,
-            params=params, verified=verified,
+            name,
+            command_template,
+            docs_url=docs_url,
+            install_hint=install_hint,
+            params=params,
+            verified=verified,
             knowledge_local_path=kl_path,
         )
 
@@ -1354,7 +1467,7 @@ def make_server(
             }
 
         def _do_execv() -> None:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            os.execv(sys.executable, [sys.executable, *sys.argv])
 
         asyncio.get_event_loop().call_later(0.5, _do_execv)
         return {"ok": True, "message": "Restarting in 0.5 s — connection will drop briefly."}
@@ -1387,7 +1500,7 @@ def make_server(
             }
 
         def _do_execv() -> None:
-            os.execv(sys.executable, [sys.executable] + sys.argv)
+            os.execv(sys.executable, [sys.executable, *sys.argv])
 
         asyncio.get_event_loop().call_later(0.5, _do_execv)
         return {"ok": True, "message": "Installed — restarting in 0.5 s."}
@@ -1396,6 +1509,7 @@ def make_server(
     # Startup cleanup — runs once when the server initialises, all non-fatal
     # ------------------------------------------------------------------
     import logging as _logging
+
     from unlimited_mcp.observability.startup_cleanup import (
         cleanup_orphaned_worktrees,
         cleanup_tmp,
@@ -1417,7 +1531,9 @@ def make_server(
     try:
         orphans = cleanup_orphaned_worktrees(state_dir() / "work")
         if orphans:
-            _startup_log.info("Startup cleanup: removed %d orphaned worktree(s): %s", len(orphans), orphans)
+            _startup_log.info(
+                "Startup cleanup: removed %d orphaned worktree(s): %s", len(orphans), orphans
+            )
     except Exception as _exc:
         _startup_log.warning("Startup cleanup worktrees failed (non-fatal): %s", _exc)
 
@@ -1426,15 +1542,21 @@ def make_server(
         try:
             _removed = trim_jsonl(_log_path, max_age_days=30)
             if _removed:
-                _startup_log.info("Startup cleanup: trimmed %d old line(s) from %s", _removed, _log_path.name)
+                _startup_log.info(
+                    "Startup cleanup: trimmed %d old line(s) from %s", _removed, _log_path.name
+                )
         except Exception as _exc:
-            _startup_log.warning("Startup cleanup trim %s failed (non-fatal): %s", _log_path.name, _exc)
+            _startup_log.warning(
+                "Startup cleanup trim %s failed (non-fatal): %s", _log_path.name, _exc
+            )
 
     # 4. /tmp/unlimited-mcp — files/dirs older than 7 days
     try:
         _tmp_removed = cleanup_tmp(Path("/tmp/unlimited-mcp"), max_age_days=7)
         if _tmp_removed:
-            _startup_log.info("Startup cleanup: removed %d item(s) from /tmp/unlimited-mcp", len(_tmp_removed))
+            _startup_log.info(
+                "Startup cleanup: removed %d item(s) from /tmp/unlimited-mcp", len(_tmp_removed)
+            )
     except Exception as _exc:
         _startup_log.warning("Startup cleanup /tmp failed (non-fatal): %s", _exc)
 

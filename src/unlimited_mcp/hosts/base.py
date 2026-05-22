@@ -84,3 +84,31 @@ class Host(Protocol):
             are written to these paths after the subprocess completes.
         """
         ...
+
+
+@runtime_checkable
+class RemoteHost(Host, Protocol):
+    """A :class:`Host` that also supports stdin piping and SFTP file transfer.
+
+    Implemented by the SSH backend. :class:`~unlimited_mcp.jobs.runner_remote.RemoteRunner`
+    is only ever constructed with one of these, so it relies on the extra surface.
+    """
+
+    def run(  # widens Host.run with the stdin_content parameter
+        self,
+        argv: list[str],
+        *,
+        cwd: str | None = None,
+        env_extra: dict[str, str] | None = None,
+        timeout_seconds: int = 60,
+        output_limit_bytes: int = 1_000_000,
+        stdout_path: Path | None = None,
+        stderr_path: Path | None = None,
+        stdin_content: bytes | None = None,
+    ) -> RunOutput: ...
+
+    def sftp_get(self, remote_path: str) -> bytes: ...
+
+    def sftp_put(self, remote_path: str, content: bytes) -> None: ...
+
+    def sftp_exists(self, remote_path: str) -> bool: ...

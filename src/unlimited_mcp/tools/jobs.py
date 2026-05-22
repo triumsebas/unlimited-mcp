@@ -184,7 +184,7 @@ def list_jobs(
     *,
     runner: LocalRunner,
     tag: str | None = None,
-    status: list[JobStatus] | None = None,
+    status: list[str] | None = None,
     include_seen: bool = False,
 ) -> list[JobResult]:
     """Return jobs matching the filters, defaulting to the inbox view.
@@ -207,11 +207,51 @@ def list_jobs(
                 continue
         else:
             # Inbox filter
-            if not include_seen:
-                if r.status in _TERMINAL and r.seen_at is not None:
-                    continue
+            if not include_seen and r.status in _TERMINAL and r.seen_at is not None:
+                continue
         out.append(r)
     return out
+
+
+def detect_conflicts(
+    *,
+    runner: LocalRunner,
+    window_seconds: int = 1800,
+) -> dict[str, Any]:
+    """Report coding jobs whose changed files overlap — call before merging branches.
+
+    Use this when you have run **several coding jobs in parallel** (e.g. multiple
+    ``delegate_to_agent`` calls on the ``ts`` queue): it cross-references the
+    ``changed_files`` of every active job and every job that finished within the
+    last *window_seconds* and lists the pairs that touch the same files. Two
+    workers editing the same file is the classic cause of merge conflicts and
+    lost work in multi-agent coding, so resolve these (review/rebase) before
+    merging the branches.
+
+    Returns ``{"conflicts": [{"jobs": [id_a, id_b], "files": [...]}], "checked": N}``.
+    An empty ``conflicts`` list means no overlaps were found.
+    """
+    now = datetime.now(UTC)
+    candidates: list[tuple[str, set[str]]] = []
+    for r in runner.list_results():
+        if not r.changed_files:
+            continue
+        recent = r.status in _ACTIVE or (
+            r.finished_at is not None and (now - r.finished_at).total_seconds() <= window_seconds
+        )
+        if recent:
+            candidates.append((r.job_id, set(r.changed_files)))
+
+    conflicts: list[dict[str, Any]] = []
+    for i in range(len(candidates)):
+        for j in range(i + 1, len(candidates)):
+            id_a, files_a = candidates[i]
+            id_b, files_b = candidates[j]
+            overlap = sorted(files_a & files_b)
+            if overlap:
+                conflicts.append({"jobs": [id_a, id_b], "files": overlap})
+
+    return {"conflicts": conflicts, "checked": len(candidates)}
 
 
 def cancel_job(job_id: str, *, runner: LocalRunner) -> JobResult:
@@ -226,6 +266,7 @@ def cancel_job(job_id: str, *, runner: LocalRunner) -> JobResult:
 # ---------------------------------------------------------------------------
 # Cleanup tools
 # ---------------------------------------------------------------------------
+
 
 def cleanup_jobs(
     *,
@@ -255,6 +296,7 @@ def cleanup_jobs(
     if dry_run:
         # Simulate without deleting
         from datetime import timedelta
+
         cutoff = datetime.now(UTC) - timedelta(days=days)
         candidates: list[str] = []
         for job_id in runner._store.list_jobs():
@@ -313,7 +355,9 @@ def cleanup_branches(
     if not (repo / ".git").exists() and not (repo / "HEAD").exists():
         probe = subprocess.run(
             ["git", "-C", str(repo), "rev-parse", "--is-inside-work-tree"],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if probe.returncode != 0:
             return {"ok": False, "error": f"{cwd} is not a git repository."}
@@ -328,8 +372,18 @@ def cleanup_branches(
 
     if merged_into:
         merged_proc = subprocess.run(
-            ["git", "-C", str(repo), "branch", "--merged", merged_into, "--format=%(refname:short)"],
-            capture_output=True, text=True, check=False,
+            [
+                "git",
+                "-C",
+                str(repo),
+                "branch",
+                "--merged",
+                merged_into,
+                "--format=%(refname:short)",
+            ],
+            capture_output=True,
+            text=True,
+            check=False,
         )
         merged_set = set(merged_proc.stdout.splitlines())
         candidates = [b for b in candidates if b in merged_set]
@@ -340,7 +394,7 @@ def cleanup_branches(
         worktrees_dirty: list[str] = []
         if work_dir and work_dir.exists():
             for branch in candidates:
-                wt_dir = work_dir / branch[len(prefix):]
+                wt_dir = work_dir / branch[len(prefix) :]
                 if wt_dir.is_dir():
                     if _worktree_is_clean(wt_dir):
                         worktree_preview.append(str(wt_dir))
@@ -362,7 +416,9 @@ def cleanup_branches(
     for branch in candidates:
         del_proc = subprocess.run(
             ["git", "-C", str(repo), "branch", "-D", branch],
-            capture_output=True, text=True, check=False,
+            capture_output=True,
+            text=True,
+            check=False,
         )
         if del_proc.returncode != 0:
             errors.append(f"{branch}: {del_proc.stderr.strip()}")
@@ -371,7 +427,7 @@ def cleanup_branches(
 
         # Try to also remove the corresponding physical worktree dir
         if work_dir and work_dir.exists():
-            wt_dir = work_dir / branch[len(prefix):]
+            wt_dir = work_dir / branch[len(prefix) :]
             if wt_dir.is_dir():
                 if _worktree_is_clean(wt_dir):
                     try:
@@ -380,7 +436,8 @@ def cleanup_branches(
                         # Prune the now-stale registration from git
                         subprocess.run(
                             ["git", "-C", str(repo), "worktree", "prune"],
-                            capture_output=True, check=False,
+                            capture_output=True,
+                            check=False,
                         )
                     except OSError:
                         pass
@@ -403,7 +460,9 @@ def _worktree_is_clean(wt_dir: Path) -> bool:
     """Return True if the git worktree at *wt_dir* has no uncommitted changes."""
     result = subprocess.run(
         ["git", "-C", str(wt_dir), "status", "--porcelain"],
-        capture_output=True, text=True, check=False,
+        capture_output=True,
+        text=True,
+        check=False,
     )
     return result.returncode == 0 and result.stdout.strip() == ""
 
@@ -412,11 +471,16 @@ def _worktree_is_clean(wt_dir: Path) -> bool:
 # Helpers
 # ---------------------------------------------------------------------------
 
+
 def _not_found(job_id: str) -> JobResult:
     now = datetime.now(UTC)
     return JobResult(
-        ok=False, job_id=job_id, status="failed", tool="get_job_result",
-        started_at=now, finished_at=now,
+        ok=False,
+        job_id=job_id,
+        status="failed",
+        tool="get_job_result",
+        started_at=now,
+        finished_at=now,
         summary=f"Job {job_id!r} not found.",
         error=ErrorBlock(
             code="JOB_NOT_FOUND",
@@ -434,5 +498,5 @@ def _parse_duration_days(s: str) -> int:
         return max(1, int(s[:-1]) // 24)
     try:
         return int(s)
-    except ValueError:
-        raise ValueError(f"Cannot parse duration {s!r}. Use e.g. '7d', '30d'.")
+    except ValueError as exc:
+        raise ValueError(f"Cannot parse duration {s!r}. Use e.g. '7d', '30d'.") from exc

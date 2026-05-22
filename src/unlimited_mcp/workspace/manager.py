@@ -46,6 +46,7 @@ class Workspace:
     spec: WorkspaceSpec
     path: Path
     branch: str | None = None
+    base_sha: str | None = None  # fork-point commit, for git_worktree mode
     _cleanup_fn: Callable[[], None] = field(default=_noop, repr=False)
 
     def cleanup(self) -> None:
@@ -105,6 +106,7 @@ class WorkspaceManager:
                 spec=resolved,
                 path=git_handle.path,
                 branch=git_handle.branch,
+                base_sha=git_handle.base_sha,
                 _cleanup_fn=lambda: cleanup_git_worktree(git_handle),
             )
 

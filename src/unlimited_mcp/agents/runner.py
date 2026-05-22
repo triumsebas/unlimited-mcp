@@ -41,28 +41,27 @@ no-op and ``branch``/``worktree_path`` are ``None``.
 
 from __future__ import annotations
 
+import contextlib
 import logging
 import os
 import re
 from datetime import UTC, datetime
 from pathlib import Path
 from string import Template
-from typing import Any
+from typing import TYPE_CHECKING, Any
 
 from unlimited_mcp.agents.base import CLIAgent
 from unlimited_mcp.config.knowledge import KnowledgeStore
 from unlimited_mcp.config.loader import ConfigStore
-from unlimited_mcp.config.schema import Config, Knowledge
+from unlimited_mcp.config.schema import Config, Knowledge, WorkspaceSpec
 from unlimited_mcp.jobs.result import ErrorBlock, JobResult, JobWarning
 from unlimited_mcp.jobs.runner_local import LocalRunner
 from unlimited_mcp.jobs.store import JobStore
 from unlimited_mcp.safety.argv_check import SafetyChecker, SafetyDecision
 from unlimited_mcp.workspace.manager import WorkspaceManager
 
-from typing import TYPE_CHECKING
 if TYPE_CHECKING:
     from unlimited_mcp.hosts.registry import HostRegistry
-    from unlimited_mcp.jobs.runner_remote import RemoteRunner
 
 log = logging.getLogger(__name__)
 
@@ -93,7 +92,11 @@ class AgentRunner:
         return self._config.get() if isinstance(self._config, ConfigStore) else self._config
 
     def _get_knowledge(self) -> Knowledge:
-        return self._knowledge.get() if isinstance(self._knowledge, KnowledgeStore) else self._knowledge
+        return (
+            self._knowledge.get()
+            if isinstance(self._knowledge, KnowledgeStore)
+            else self._knowledge
+        )
 
     def submit(
         self,
@@ -147,11 +150,15 @@ class AgentRunner:
         effective_cwd = cwd
         branch: str | None = None
         worktree_path: str | None = None
+        worktree_base: str | None = None
 
         if not is_remote and self._workspace_manager is not None:
             # workspace_override="" or "none" explicitly disables worktree.
+            workspace_preset: str | WorkspaceSpec | None
             if workspace_override is not None:
-                workspace_preset = workspace_override if workspace_override not in ("", "none") else None
+                workspace_preset = (
+                    workspace_override if workspace_override not in ("", "none") else None
+                )
             else:
                 workspace_preset = agent_cfg.workspace if agent_cfg else None
             if workspace_preset and cwd is not None:
@@ -164,6 +171,7 @@ class AgentRunner:
                     effective_cwd = str(workspace.path)
                     branch = workspace.branch
                     worktree_path = str(workspace.path) if workspace.branch else None
+                    worktree_base = workspace.base_sha if workspace.branch else None
                 except Exception as exc:
                     log.warning("Workspace creation failed for %r: %s", agent_name, exc)
                     # Fall back to running in the original cwd without a worktree.
@@ -180,23 +188,33 @@ class AgentRunner:
             _is_remote_ts = False
             try:
                 from unlimited_mcp.jobs.runner_remote_ts import RemoteTsRunner as _RemoteTsRunner
+
                 _is_remote_ts = isinstance(runner_override, _RemoteTsRunner)
             except ImportError:
                 pass
 
             agent_cfg = cfg.agents.get(agent_name)
             if agent_cfg is not None and not agent_cfg.supports_clarify:
-                warnings.append(JobWarning(
-                    code="CLARIFY_NOT_SUPPORTED",
-                    message=f"Agent {agent_name!r} has supports_clarify=False; Q&A phase skipped.",
-                    hint="Set supports_clarify=true in config.yaml if the agent has been verified.",
-                ))
+                warnings.append(
+                    JobWarning(
+                        code="CLARIFY_NOT_SUPPORTED",
+                        message=(
+                            f"Agent {agent_name!r} has supports_clarify=False; Q&A phase skipped."
+                        ),
+                        hint=(
+                            "Set supports_clarify=true in config.yaml if the agent "
+                            "has been verified."
+                        ),
+                    )
+                )
                 clarify_rounds = 0
             else:
                 clarify_cfg = cfg.clarify
                 effective_rounds = min(clarify_rounds, clarify_cfg.max_rounds)
                 pre_job_id = JobStore.make_job_id(tool)
-                active_runner = runner_override if runner_override is not None else self._local_runner
+                active_runner = (
+                    runner_override if runner_override is not None else self._local_runner
+                )
                 active_runner._store.create(pre_job_id)
                 q_dir = active_runner._store.questions_dir(pre_job_id)
                 if _is_remote_ts or is_remote:
@@ -230,10 +248,8 @@ class AgentRunner:
         )
         if not decision.allowed:
             if workspace is not None:
-                try:
+                with contextlib.suppress(Exception):
                     workspace.cleanup()
-                except Exception:
-                    pass
             return _decision_to_blocked_result(decision, agent_name=agent_name, tool=tool)
 
         # ---- submit ----------------------------------------------------------
@@ -249,6 +265,7 @@ class AgentRunner:
                     "HostRegistry is configured in AgentRunner."
                 )
             from unlimited_mcp.jobs.runner_remote import RemoteRunner
+
             host = self._host_registry.get(exec_host)
             active_runner = RemoteRunner(host, self._local_runner._store)
         else:
@@ -267,6 +284,8 @@ class AgentRunner:
             tool=tool,
             branch=branch,
             worktree_path=worktree_path,
+            worktree_base=worktree_base,
+            quality_gate_enabled=cfg.quality_gate.enabled,
             cleanup_fn=cleanup_fn,
             stdin_content=render.stdin_content,
             prompt_file_content=render.prompt_file_content,

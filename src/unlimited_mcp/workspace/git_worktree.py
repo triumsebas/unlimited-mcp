@@ -30,6 +30,7 @@ class GitWorktreeHandle:
     repo: Path
     path: Path
     branch: str
+    base_sha: str | None = None  # repo HEAD at creation — the branch's fork point
 
     def diff(self) -> str:
         """Return ``git diff`` output for this worktree (porcelain).
@@ -43,6 +44,40 @@ class GitWorktreeHandle:
             check=True,
         )
         return result.stdout
+
+
+def changed_files(worktree_path: str | Path, base_sha: str | None = None) -> list[str]:
+    """Return repo-relative paths the worker changed in this worktree.
+
+    Captures committed + staged + unstaged modifications to tracked files
+    (``git diff --name-only`` against the worktree's base commit) plus new
+    untracked files. When *base_sha* is unknown we fall back to ``HEAD``,
+    which misses files the worker committed — pass *base_sha* whenever the
+    branch's fork point is known.
+    """
+    wt = str(worktree_path)
+    out: set[str] = set()
+
+    diff_target = base_sha or "HEAD"
+    tracked = subprocess.run(
+        ["git", "-C", wt, "diff", "--name-only", diff_target],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if tracked.returncode == 0:
+        out.update(line for line in tracked.stdout.splitlines() if line)
+
+    untracked = subprocess.run(
+        ["git", "-C", wt, "ls-files", "--others", "--exclude-standard"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if untracked.returncode == 0:
+        out.update(line for line in untracked.stdout.splitlines() if line)
+
+    return sorted(out)
 
 
 def is_git_repo(path: Path) -> bool:
@@ -80,6 +115,16 @@ def create_git_worktree(
     if target_dir.exists():
         raise FileExistsError(f"{target_dir} already exists")
 
+    base_sha: str | None = None
+    head = subprocess.run(
+        ["git", "-C", str(repo), "rev-parse", "HEAD"],
+        check=False,
+        capture_output=True,
+        text=True,
+    )
+    if head.returncode == 0:
+        base_sha = head.stdout.strip() or None
+
     target_dir.parent.mkdir(parents=True, exist_ok=True)
     subprocess.run(
         [
@@ -96,7 +141,7 @@ def create_git_worktree(
         capture_output=True,
         text=True,
     )
-    return GitWorktreeHandle(repo=repo, path=target_dir, branch=branch_name)
+    return GitWorktreeHandle(repo=repo, path=target_dir, branch=branch_name, base_sha=base_sha)
 
 
 def cleanup_git_worktree(

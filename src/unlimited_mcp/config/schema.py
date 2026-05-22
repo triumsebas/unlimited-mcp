@@ -77,6 +77,19 @@ class SafetyConfig(_Strict):
     confirm_token_ttl_seconds: int = 300
 
 
+class QualityGateConfig(_Strict):
+    """Post-job lint + type-check on a coding worker's changed files.
+
+    When ``enabled`` and the job ran in a git worktree, the runner detects the
+    language of the changed files, auto-fixes formatting, runs the linter and
+    type-checker, and attaches a :class:`~unlimited_mcp.jobs.result.QualityGateResult`
+    to the JobResult. Non-intrusive: unknown languages and missing tools degrade
+    to ``NOTDETECTED`` / ``MISSINGDEP`` rather than failing the job.
+    """
+
+    enabled: bool = True
+
+
 class ClarifyConfig(_Strict):
     """Limits for the worker clarification-rounds protocol.
 
@@ -209,6 +222,7 @@ class Config(_Strict):
     schema_version: int = 1
     safety: SafetyConfig = Field(default_factory=SafetyConfig)
     clarify: ClarifyConfig = Field(default_factory=ClarifyConfig)
+    quality_gate: QualityGateConfig = Field(default_factory=QualityGateConfig)
     allowed_roots: list[str] = Field(default_factory=list)
     deny_paths: list[str] = Field(default_factory=list)
     hosts: dict[str, HostConfig] = Field(default_factory=dict)

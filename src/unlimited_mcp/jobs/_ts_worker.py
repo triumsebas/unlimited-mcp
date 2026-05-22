@@ -39,12 +39,14 @@ finishes early; a short timeout kills work in progress.
 
 from __future__ import annotations
 
+import contextlib
 import json
 import os
 import subprocess
 import sys
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 
 
 def _write_json(path: Path, data: object) -> None:
@@ -56,10 +58,8 @@ def _write_json(path: Path, data: object) -> None:
             json.dump(data, fh, indent=2)
         os.replace(tmp, path)
     except Exception:
-        try:
+        with contextlib.suppress(OSError):
             os.unlink(tmp)
-        except OSError:
-            pass
         raise
 
 
@@ -88,14 +88,12 @@ def _write_result_unless_cancelled(job_dir: Path, result: object) -> None:
 
 
 def _remove_worktree(worktree_path: str) -> None:
-    try:
+    with contextlib.suppress(Exception):
         subprocess.run(
             ["git", "worktree", "remove", "--force", worktree_path],
             capture_output=True,
             check=False,
         )
-    except Exception:
-        pass
 
 
 def main() -> None:
@@ -103,7 +101,7 @@ def main() -> None:
         sys.exit("usage: _ts_worker <job_dir> <json_args>")
 
     job_dir = Path(sys.argv[1])
-    args: dict = json.loads(sys.argv[2])
+    args: dict[str, Any] = json.loads(sys.argv[2])
 
     argv: list[str] = args["argv"]
     cwd: str | None = args.get("cwd")
@@ -113,18 +111,23 @@ def main() -> None:
     tag: str | None = args.get("tag")
     branch: str | None = args.get("branch")
     worktree_path: str | None = args.get("worktree_path")
+    worktree_base: str | None = args.get("worktree_base")
+    quality_gate_enabled: bool = bool(args.get("quality_gate_enabled", True))
     stdin_file: str | None = args.get("stdin_file")
 
     started_at = datetime.now(UTC)
     state_path = job_dir / "state.json"
 
-    _write_json(state_path, {
-        "status": "running",
-        "pid": os.getpid(),
-        "started_at": started_at.isoformat(),
-        "exit_code": None,
-        "finished_at": None,
-    })
+    _write_json(
+        state_path,
+        {
+            "status": "running",
+            "pid": os.getpid(),
+            "started_at": started_at.isoformat(),
+            "exit_code": None,
+            "finished_at": None,
+        },
+    )
 
     env = {**os.environ, **env_extra}
     timed_out = False
@@ -133,7 +136,9 @@ def main() -> None:
     stdout_path = job_dir / "stdout.log"
     stderr_path = job_dir / "stderr.log"
 
-    stdin_fh = open(stdin_file, "rb") if stdin_file else subprocess.DEVNULL  # noqa: WPS515
+    # Conditionally a file or DEVNULL; closed in the finally below. A `with`
+    # can't express the DEVNULL branch cleanly, so suppress SIM115 here.
+    stdin_fh = open(stdin_file, "rb") if stdin_file else subprocess.DEVNULL  # noqa: SIM115
     with stdout_path.open("wb") as out, stderr_path.open("wb") as err:
         try:
             proc = subprocess.run(
@@ -154,23 +159,31 @@ def main() -> None:
             exit_code = -1
         finally:
             if stdin_file and hasattr(stdin_fh, "close"):
-                stdin_fh.close()  # type: ignore[union-attr]
+                stdin_fh.close()
 
     finished_at = datetime.now(UTC)
     duration_ms = int((finished_at - started_at).total_seconds() * 1000)
 
-    _write_json(state_path, {
-        "status": "finished",
-        "pid": os.getpid(),
-        "started_at": started_at.isoformat(),
-        "exit_code": exit_code,
-        "finished_at": finished_at.isoformat(),
-    })
+    _write_json(
+        state_path,
+        {
+            "status": "finished",
+            "pid": os.getpid(),
+            "started_at": started_at.isoformat(),
+            "exit_code": exit_code,
+            "finished_at": finished_at.isoformat(),
+        },
+    )
 
     ok = exit_code == 0 and not timed_out
     if timed_out:
         summary = f"Timed out after {timeout}s."
-        error = {"code": "TIMEOUT", "message": f"Process exceeded {timeout}s.", "hint": "Increase timeout_seconds.", "retryable": True}
+        error = {
+            "code": "TIMEOUT",
+            "message": f"Process exceeded {timeout}s.",
+            "hint": "Increase timeout_seconds.",
+            "retryable": True,
+        }
     elif exit_code != 0:
         tail = b""
         for p in (stderr_path, stdout_path):
@@ -178,8 +191,16 @@ def main() -> None:
                 tail = p.read_bytes()[-2048:]
                 if tail:
                     break
-        summary = tail.decode("utf-8", errors="replace").strip()[-200:] or f"Exited with code {exit_code}."
-        error = {"code": "NONZERO_EXIT", "message": f"Process exited with code {exit_code}.", "hint": "Check raw_output_ref for details.", "retryable": False}
+        summary = (
+            tail.decode("utf-8", errors="replace").strip()[-200:]
+            or f"Exited with code {exit_code}."
+        )
+        error = {
+            "code": "NONZERO_EXIT",
+            "message": f"Process exited with code {exit_code}.",
+            "hint": "Check raw_output_ref for details.",
+            "retryable": False,
+        }
     else:
         _content = b""
         for _p in (stdout_path, stderr_path):
@@ -187,8 +208,32 @@ def main() -> None:
                 _content = _p.read_bytes()[-500:]
                 if _content.strip():
                     break
-        summary = _content.decode("utf-8", errors="replace").strip()[-500:] or "Completed successfully."
+        summary = (
+            _content.decode("utf-8", errors="replace").strip()[-500:] or "Completed successfully."
+        )
         error = None
+
+    # Post-process while the worktree still exists (removed at the end):
+    # changed_files, quality gate, conflict detection. Never fatal.
+    changed_files: list[str] = []
+    quality_gate: dict[str, object] | None = None
+    warnings: list[dict[str, object]] = []
+    try:
+        from unlimited_mcp.jobs.postprocess import run_postprocess
+        from unlimited_mcp.jobs.store import JobStore
+
+        post = run_postprocess(
+            job_dir.name,
+            worktree_path,
+            worktree_base,
+            JobStore(job_dir.parent),
+            quality_gate_enabled=quality_gate_enabled,
+        )
+        changed_files = post.changed_files
+        quality_gate = post.quality_gate.model_dump(mode="json") if post.quality_gate else None
+        warnings = [w.model_dump(mode="json") for w in post.warnings]
+    except Exception:
+        pass
 
     result = {
         "ok": ok,
@@ -201,16 +246,27 @@ def main() -> None:
         "seen_at": None,
         "duration_ms": duration_ms,
         "summary": summary,
-        "changed_files": [],
+        "changed_files": changed_files,
         "diff_ref": None,
         "branch": branch,
         "worktree_path": worktree_path,
-        "commands_run": [{"argv": argv, "cwd": cwd, "host": "local", "exit_code": exit_code,
-                          "duration_ms": duration_ms, "safety_class": "unknown",
-                          "risk_level": "low", "blast_radius": "local", "confirm_token_used": False}],
+        "commands_run": [
+            {
+                "argv": argv,
+                "cwd": cwd,
+                "host": "local",
+                "exit_code": exit_code,
+                "duration_ms": duration_ms,
+                "safety_class": "unknown",
+                "risk_level": "low",
+                "blast_radius": "local",
+                "confirm_token_used": False,
+            }
+        ],
         "tests": None,
+        "quality_gate": quality_gate,
         "artifacts": [],
-        "warnings": [],
+        "warnings": warnings,
         "questions": [],
         "raw_output_ref": str(stdout_path),
         "output_truncated": False,

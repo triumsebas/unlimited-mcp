@@ -16,13 +16,13 @@ Usage::
 
 from __future__ import annotations
 
+from typing import TYPE_CHECKING
+
 from unlimited_mcp.safety.redactor import Redactor
 
 from .base import Host
 from .local import LocalHost
 from .ssh import SshHost
-
-from typing import TYPE_CHECKING
 
 if TYPE_CHECKING:
     from unlimited_mcp.config.loader import ConfigStore
@@ -68,14 +68,13 @@ class HostRegistry:
             self._cache[name] = host
             return host
 
-        cfg = self._config.get() if hasattr(self._config, "get") else self._config  # type: ignore[union-attr]
+        from unlimited_mcp.config.loader import ConfigStore
+
+        cfg = self._config.get() if isinstance(self._config, ConfigStore) else self._config
         host_cfg = cfg.hosts.get(name)
         if host_cfg is None:
             known = list(cfg.hosts.keys()) or ["(none configured)"]
-            raise KeyError(
-                f"Host {name!r} not found in config.hosts. "
-                f"Known hosts: {known}"
-            )
+            raise KeyError(f"Host {name!r} not found in config.hosts. Known hosts: {known}")
 
         if host_cfg.type == "local":
             host = LocalHost(redactor=self._redactor)
