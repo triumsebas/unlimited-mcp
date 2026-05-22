@@ -2,14 +2,11 @@
 
 from __future__ import annotations
 
-from unittest.mock import MagicMock, call
-
-import pytest
+from unittest.mock import MagicMock
 
 from unlimited_mcp.config.schema import SshHostConfig
-from unlimited_mcp.hosts.ssh import SshHost
 from unlimited_mcp.hosts.base import RunOutput
-
+from unlimited_mcp.hosts.ssh import SshHost
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -83,10 +80,12 @@ def test_find_remote_ts_bin_cache_reset_on_reconnect() -> None:
 def test_ts_submit_returns_slot_id() -> None:
     host = SshHost(_config())
     # _find_remote_ts_bin call + ts submit call
-    host.run = MagicMock(side_effect=[
-        _run_output(b"tsp\n"),   # _find_remote_ts_bin
-        _run_output(b"5\n"),     # ts -L label sh -c ...
-    ])
+    host.run = MagicMock(
+        side_effect=[
+            _run_output(b"tsp\n"),  # _find_remote_ts_bin
+            _run_output(b"5\n"),  # ts -L label sh -c ...
+        ]
+    )
     slot = host.ts_submit(["echo", "hi"], label="myjob")
     assert slot == 5
 
@@ -171,10 +170,12 @@ def test_ts_status_passes_socket() -> None:
 def test_ts_output_cats_file() -> None:
     host = SshHost(_config())
     host._ts_bin_cache = "ts"
-    host.run = MagicMock(side_effect=[
-        _run_output(b"/tmp/ts-out-abc\n"),    # ts -o slot
-        _run_output(b"hello output\n"),        # cat /tmp/ts-out-abc
-    ])
+    host.run = MagicMock(
+        side_effect=[
+            _run_output(b"/tmp/ts-out-abc\n"),  # ts -o slot
+            _run_output(b"hello output\n"),  # cat /tmp/ts-out-abc
+        ]
+    )
     out = host.ts_output(5)
     assert out == b"hello output\n"
     # Second call should be cat of the path returned by ts -o

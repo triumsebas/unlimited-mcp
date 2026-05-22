@@ -32,8 +32,13 @@ from unlimited_mcp.jobs.store import JobStore, file_lock
 def _completed(job_id: str) -> JobResult:
     now = datetime.now(UTC)
     return JobResult(
-        ok=True, job_id=job_id, status="completed", tool="run_command",
-        started_at=now, finished_at=now, summary="worker finished fast",
+        ok=True,
+        job_id=job_id,
+        status="completed",
+        tool="run_command",
+        started_at=now,
+        finished_at=now,
+        summary="worker finished fast",
     )
 
 
@@ -108,8 +113,15 @@ def test_worker_does_not_overwrite_cancelled(tmp_path: Path) -> None:
     job_dir = store.create(job_id)
     now = datetime.now(UTC)
     store.write_result(
-        JobResult(ok=False, job_id=job_id, status="cancelled", tool="run_command",
-                  started_at=now, finished_at=now, summary="Cancelled by orchestrator.")
+        JobResult(
+            ok=False,
+            job_id=job_id,
+            status="cancelled",
+            tool="run_command",
+            started_at=now,
+            finished_at=now,
+            summary="Cancelled by orchestrator.",
+        )
     )
 
     _ts_worker._write_result_unless_cancelled(job_dir, _completed(job_id).model_dump(mode="json"))

@@ -493,16 +493,26 @@ def test_cancel_wins_over_concurrent_completion(store: JobStore) -> None:
     )
     _write_state(
         store.job_dir(job_id) / "state.json",
-        {"status": "running", "pid": os.getpid(), "started_at": started_at.isoformat(),
-         "cancel_requested": False},
+        {
+            "status": "running",
+            "pid": os.getpid(),
+            "started_at": started_at.isoformat(),
+            "cancel_requested": False,
+        },
     )
 
     # Mark cancelled (as cancel() would inside its lock), then have the watcher's
     # final-section guard run: it must observe the cancel and refuse to write.
     runner._cancelled.add(job_id)
     store.write_result(
-        JobResult(ok=False, job_id=job_id, status="cancelled", tool="test",
-                  started_at=started_at, finished_at=datetime.now(UTC))
+        JobResult(
+            ok=False,
+            job_id=job_id,
+            status="cancelled",
+            tool="test",
+            started_at=started_at,
+            finished_at=datetime.now(UTC),
+        )
     )
 
     assert runner._is_cancelled(job_id) is True
@@ -511,8 +521,14 @@ def test_cancel_wins_over_concurrent_completion(store: JobStore) -> None:
     with runner._lock_for(job_id):
         if not runner._is_cancelled(job_id):
             store.write_result(
-                JobResult(ok=True, job_id=job_id, status="completed", tool="test",
-                          started_at=started_at, finished_at=datetime.now(UTC))
+                JobResult(
+                    ok=True,
+                    job_id=job_id,
+                    status="completed",
+                    tool="test",
+                    started_at=started_at,
+                    finished_at=datetime.now(UTC),
+                )
             )
 
     final = store.read_result(job_id)

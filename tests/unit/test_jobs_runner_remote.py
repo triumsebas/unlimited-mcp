@@ -7,12 +7,9 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from unlimited_mcp.hosts.base import RunOutput
 from unlimited_mcp.jobs.runner_remote import RemoteRunner
 from unlimited_mcp.jobs.store import JobStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -160,8 +157,14 @@ def test_cancel_prevents_result_overwrite(tmp_path: Path) -> None:
     def _slow_run(*_a: object, **_kw: object) -> RunOutput:
         barrier.wait(timeout=3)
         time.sleep(0.2)
-        return RunOutput(stdout=b"", stderr=b"", exit_code=0,
-                         duration_ms=200, output_truncated=False, output_bytes=0)
+        return RunOutput(
+            stdout=b"",
+            stderr=b"",
+            exit_code=0,
+            duration_ms=200,
+            output_truncated=False,
+            output_bytes=0,
+        )
 
     host = MagicMock()
     host.name = "ssh:test"
@@ -194,8 +197,8 @@ def test_stdin_content_passed_to_host(tmp_path: Path) -> None:
 
 
 def test_prompt_file_uploaded_and_substituted(tmp_path: Path) -> None:
+
     from unlimited_mcp.hosts.ssh import SshHost
-    from unittest.mock import MagicMock, patch
 
     host = _mock_host()
     # Make it look like an SshHost so the isinstance check passes.
@@ -203,6 +206,7 @@ def test_prompt_file_uploaded_and_substituted(tmp_path: Path) -> None:
 
     store = JobStore(tmp_path / "jobs")
     from unlimited_mcp.jobs.runner_remote import RemoteRunner
+
     r = RemoteRunner(host, store)
     r.submit(["{prompt_file}", "--flag"], prompt_file_content="my task here")
     r.join_all(timeout=5)

@@ -10,9 +10,7 @@ import pytest
 
 from unlimited_mcp.config.schema import SshHostConfig
 from unlimited_mcp.hosts import Host, SshHost
-from unlimited_mcp.hosts.base import RunOutput
 from unlimited_mcp.safety.redactor import Redactor
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -215,6 +213,7 @@ def test_run_timeout_raises(tmp_path: Path) -> None:
     # stdout.read() blocks forever — simulate with a slow mock via side_effect
     def _slow_read() -> bytes:
         import time
+
         time.sleep(10)
         return b""
 
@@ -429,10 +428,10 @@ def _mock_paramiko_with_exc(agent_keys: int = 0) -> tuple[MagicMock, MagicMock]:
     controllable Agent().get_keys() length."""
     mock_mod, mock_client = _mock_paramiko()
 
-    class _SSHException(Exception):
+    class _SSHError(Exception):
         pass
 
-    mock_mod.SSHException = _SSHException
+    mock_mod.SSHException = _SSHError
     agent = MagicMock()
     agent.get_keys.return_value = [object()] * agent_keys
     mock_mod.Agent.return_value = agent
@@ -452,9 +451,7 @@ def test_missing_keyring_falls_back_to_agent_connect() -> None:
     mock_keyring.get_password.return_value = None
     mock_mod, mock_client = _mock_paramiko_with_exc(agent_keys=1)
 
-    with patch.dict(
-        "sys.modules", {"keyring": mock_keyring, "paramiko": mock_mod}
-    ):
+    with patch.dict("sys.modules", {"keyring": mock_keyring, "paramiko": mock_mod}):
         host._connect()
 
     call_kwargs = mock_client.connect.call_args[1]
@@ -480,11 +477,11 @@ def test_missing_keyring_and_agent_fail_gives_clear_error() -> None:
         "encountered RSA key, expected OPENSSH key"
     )
 
-    with patch.dict(
-        "sys.modules", {"keyring": mock_keyring, "paramiko": mock_mod}
+    with (
+        patch.dict("sys.modules", {"keyring": mock_keyring, "paramiko": mock_mod}),
+        pytest.raises(RuntimeError, match="Configured passphrase unavailable"),
     ):
-        with pytest.raises(RuntimeError, match="Configured passphrase unavailable"):
-            host._connect()
+        host._connect()
 
 
 # ---------------------------------------------------------------------------
@@ -494,9 +491,11 @@ def test_missing_keyring_and_agent_fail_gives_clear_error() -> None:
 
 def test_connect_without_paramiko_raises() -> None:
     host = SshHost(_config())
-    with patch.dict("sys.modules", {"paramiko": None}):  # type: ignore[dict-item]
-        with pytest.raises((RuntimeError, ImportError)):
-            host._connect()
+    with (
+        patch.dict("sys.modules", {"paramiko": None}),  # type: ignore[dict-item]
+        pytest.raises((RuntimeError, ImportError)),
+    ):
+        host._connect()
 
 
 # ---------------------------------------------------------------------------
@@ -537,7 +536,9 @@ def test_forward_agent_uses_channel_path() -> None:
     mock_paramiko_mod = MagicMock()
     mock_paramiko_mod.agent = mock_agent_mod
 
-    with patch.dict("sys.modules", {"paramiko": mock_paramiko_mod, "paramiko.agent": mock_agent_mod}):
+    with patch.dict(
+        "sys.modules", {"paramiko": mock_paramiko_mod, "paramiko.agent": mock_agent_mod}
+    ):
         out = host.run(["git", "push"])
 
     mock_transport.open_session.assert_called_once()

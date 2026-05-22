@@ -25,7 +25,7 @@ def test_unknown_host_raises() -> None:
     registry = HostRegistry(_cfg())
     try:
         registry.get("missing")
-        assert False, "expected KeyError"
+        raise AssertionError("expected KeyError")
     except KeyError as exc:
         assert "missing" in str(exc)
 

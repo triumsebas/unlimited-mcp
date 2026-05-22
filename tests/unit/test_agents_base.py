@@ -338,5 +338,7 @@ def test_substitute_value_combined() -> None:
 
 
 def test_expand_template_files_only() -> None:
-    out = _expand_template("cmd {files}", prompt=None, files=["a", "b"], cwd=None, include_prompt_token=False)
+    out = _expand_template(
+        "cmd {files}", prompt=None, files=["a", "b"], cwd=None, include_prompt_token=False
+    )
     assert out == ["cmd", "a", "b"]

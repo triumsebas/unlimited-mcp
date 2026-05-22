@@ -6,11 +6,8 @@ import time
 from pathlib import Path
 from unittest.mock import MagicMock
 
-import pytest
-
 from unlimited_mcp.jobs.runner_remote_ts import RemoteTsRunner
 from unlimited_mcp.jobs.store import JobStore
-
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -351,6 +348,7 @@ def test_max_slots_configures_remote_on_first_submit(tmp_path: Path) -> None:
 def test_clarify_sync_downloads_question_file(tmp_path: Path) -> None:
     """Poller downloads question file from remote to local questions_dir."""
     import json as _json
+
     from unlimited_mcp.jobs.store import JobStore
 
     questions_payload = _json.dumps([{"id": 1, "question": "Which approach?"}]).encode()
@@ -362,8 +360,8 @@ def test_clarify_sync_downloads_question_file(tmp_path: Path) -> None:
     host.run.side_effect = [
         MagicMock(stdout=b"/tmp/q/round_001_questions.json\n"),  # ls (running iteration)
         MagicMock(stdout=b"/tmp/q/round_001_questions.json\n"),  # ls (finished iteration)
-        MagicMock(stdout=b"0"),                                   # cat ec_path
-        MagicMock(stdout=b""),                                    # rm ec_path
+        MagicMock(stdout=b"0"),  # cat ec_path
+        MagicMock(stdout=b""),  # rm ec_path
     ]
     host.sftp_get.return_value = questions_payload
     host.sftp_exists.return_value = False  # no answers yet
@@ -381,15 +379,16 @@ def test_clarify_sync_downloads_question_file(tmp_path: Path) -> None:
 def test_clarify_sync_uploads_answer_file(tmp_path: Path) -> None:
     """Poller uploads answers written locally to the remote questions dir."""
     import json as _json
+
     from unlimited_mcp.jobs.store import JobStore
 
     host = _mock_host(statuses=["running", "finished"])
     host.run.side_effect = [
-        MagicMock(stdout=b"ts\n"),   # _find_remote_ts_bin
-        MagicMock(stdout=b"2\n"),    # ts_submit
-        MagicMock(stdout=b""),       # ls — no question files yet
-        MagicMock(stdout=b"0"),      # cat ec_path
-        MagicMock(stdout=b""),       # rm ec_path
+        MagicMock(stdout=b"ts\n"),  # _find_remote_ts_bin
+        MagicMock(stdout=b"2\n"),  # ts_submit
+        MagicMock(stdout=b""),  # ls — no question files yet
+        MagicMock(stdout=b"0"),  # cat ec_path
+        MagicMock(stdout=b""),  # rm ec_path
     ]
     host.sftp_exists.return_value = False  # answer not yet uploaded
 

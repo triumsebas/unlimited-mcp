@@ -8,6 +8,7 @@ exercised through :meth:`FastMCP.call_tool` (no network / stdio needed).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import json
 from pathlib import Path
 from typing import Any
@@ -64,6 +65,7 @@ _PHASE_1_TOOLS = {
     "await_job",
     "list_jobs",
     "cancel_job",
+    "detect_conflicts",
     "cleanup_jobs",
     "cleanup_branches",
     "cleanup_state",
@@ -176,7 +178,7 @@ def test_delegate_to_agent_default_queue_does_not_shadow_agent_exec_host(
     If it did, the agent's own exec_host field would be silently ignored even when
     the caller omits both exec_host and queue arguments.
     """
-    from unittest.mock import MagicMock, patch
+    from unittest.mock import patch
 
     config_yaml = """\
 allowed_roots: []
@@ -206,21 +208,21 @@ agents:
             "risk_level": "low",
         }
 
-    with patch("unlimited_mcp.server._delegate_to_agent", side_effect=fake_delegate):
-        try:
-            _run(
-                app.call_tool(
-                    "delegate_to_agent",
-                    {"agent_name": "remote_echo", "prompt": "hello"},
-                )
+    # agent not fully configured — we only care about the captured values
+    with (
+        patch("unlimited_mcp.server._delegate_to_agent", side_effect=fake_delegate),
+        contextlib.suppress(Exception),
+    ):
+        _run(
+            app.call_tool(
+                "delegate_to_agent",
+                {"agent_name": "remote_echo", "prompt": "hello"},
             )
-        except Exception:
-            pass  # agent not fully configured — we only care about captured values
+        )
 
     # The fix: runner_override must be None when queue=='local' so agent's exec_host wins
-    assert captured.get("runner_override") is None, (
-        f"runner_override should be None when queue='local', got {captured.get('runner_override')!r}"
-    )
+    got = captured.get("runner_override")
+    assert got is None, f"runner_override should be None when queue='local', got {got!r}"
 
 
 # ---------------------------------------------------------------------------

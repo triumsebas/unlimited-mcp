@@ -174,8 +174,9 @@ def test_await_job_returns_terminal_when_finished(store: JobStore) -> None:
     store.create(job_id)
     now = datetime.now(UTC)
     store.write_result(
-        JobResult(ok=True, job_id=job_id, status="completed", tool="test",
-                  started_at=now, finished_at=now)
+        JobResult(
+            ok=True, job_id=job_id, status="completed", tool="test", started_at=now, finished_at=now
+        )
     )
     result = await_job(job_id, poll_interval=0.02, max_wait=0.2, runner=runner)
     assert result.status == "completed"
