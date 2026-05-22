@@ -25,10 +25,15 @@ from typing import Any
 
 from ruamel.yaml.comments import CommentedMap, CommentedSeq
 
-from unlimited_mcp.config.knowledge import KnowledgeStore
 from unlimited_mcp.config.loader import ConfigStore
-from unlimited_mcp.config.schema import AgentConfig, Config, Knowledge, ProviderConfig, QueueConfig, SshHostConfig
-
+from unlimited_mcp.config.schema import (
+    AgentConfig,
+    Config,
+    Knowledge,
+    ProviderConfig,
+    QueueConfig,
+    SshHostConfig,
+)
 
 # ---------------------------------------------------------------------------
 # list_capabilities
@@ -139,7 +144,10 @@ def add_provider(
         providers[name] = entry
 
     config_store.update(_mutate)
-    return {"ok": True, "message": f"Provider {name!r} added (type={provider_type}, model={model})."}
+    return {
+        "ok": True,
+        "message": f"Provider {name!r} added (type={provider_type}, model={model}).",
+    }
 
 
 # ---------------------------------------------------------------------------
@@ -194,7 +202,7 @@ def add_agent(
 
 def configure_agent(
     name: str,
-    set: dict[str, Any] | None = None,  # noqa: A002
+    set: dict[str, Any] | None = None,
     unset: list[str] | None = None,
     *,
     config_store: ConfigStore,
@@ -214,8 +222,16 @@ def configure_agent(
         entry = agents[name]
         # Top-level fields that can be set directly.
         top_level = {
-            "cli", "cost_tier", "speed_tier", "tags", "suitable_for",
-            "workspace", "queue", "exec_host", "env_extra", "supports_clarify",
+            "cli",
+            "cost_tier",
+            "speed_tier",
+            "tags",
+            "suitable_for",
+            "workspace",
+            "queue",
+            "exec_host",
+            "env_extra",
+            "supports_clarify",
         }
         for k, v in set.items():
             if k in top_level:
@@ -259,14 +275,19 @@ def configure_safety(
         return {
             "ok": False,
             "message": f"Invalid default_safety_policy {default_safety_policy!r}. "
-                       f"Valid: {sorted(valid_policies)}",
+            f"Valid: {sorted(valid_policies)}",
         }
 
     def _mutate(doc: CommentedMap) -> None:
-        if any(v is not None for v in [
-            allow_shell_like_argv, default_safety_policy,
-            confirm_token_ttl_seconds, log_full_shell_scripts,
-        ]):
+        if any(
+            v is not None
+            for v in [
+                allow_shell_like_argv,
+                default_safety_policy,
+                confirm_token_ttl_seconds,
+                log_full_shell_scripts,
+            ]
+        ):
             safety = doc.setdefault("safety", CommentedMap())
             if allow_shell_like_argv is not None:
                 safety["allow_shell_like_argv"] = allow_shell_like_argv
@@ -285,14 +306,18 @@ def configure_safety(
                 clarify["max_total_seconds"] = clarify_max_seconds
 
     config_store.update(_mutate)
-    changed = {k: v for k, v in {
-        "allow_shell_like_argv": allow_shell_like_argv,
-        "default_safety_policy": default_safety_policy,
-        "confirm_token_ttl_seconds": confirm_token_ttl_seconds,
-        "log_full_shell_scripts": log_full_shell_scripts,
-        "clarify_max_rounds": clarify_max_rounds,
-        "clarify_max_seconds": clarify_max_seconds,
-    }.items() if v is not None}
+    changed = {
+        k: v
+        for k, v in {
+            "allow_shell_like_argv": allow_shell_like_argv,
+            "default_safety_policy": default_safety_policy,
+            "confirm_token_ttl_seconds": confirm_token_ttl_seconds,
+            "log_full_shell_scripts": log_full_shell_scripts,
+            "clarify_max_rounds": clarify_max_rounds,
+            "clarify_max_seconds": clarify_max_seconds,
+        }.items()
+        if v is not None
+    }
     return {"ok": True, "message": f"Updated: {changed}"}
 
 
@@ -407,9 +432,7 @@ def add_queue(
     (existing queues are wired at startup). Call restart_server() after
     adding a queue.
     """
-    QueueConfig.model_validate(
-        {"type": queue_type, "slots": slots, "host": host, "socket": socket}
-    )
+    QueueConfig.model_validate({"type": queue_type, "slots": slots, "host": host, "socket": socket})
 
     def _mutate(doc: CommentedMap) -> None:
         queues = doc.setdefault("queues", CommentedMap())
@@ -466,7 +489,7 @@ def ssh_trust_host(host: str, port: int = 22) -> dict[str, Any]:
     with open(known_hosts_path, "a") as f:
         f.write(result.stdout)
 
-    lines = [l for l in result.stdout.strip().splitlines() if l]
+    lines = [ln for ln in result.stdout.strip().splitlines() if ln]
     return {
         "ok": True,
         "message": (

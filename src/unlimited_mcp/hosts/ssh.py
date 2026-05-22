@@ -24,12 +24,14 @@ Requires the ``ssh`` optional dependency group::
 
 from __future__ import annotations
 
+import contextlib
 import os
 import shlex
 import subprocess
 import threading
 import time
-from concurrent.futures import ThreadPoolExecutor, TimeoutError as FutureTimeout
+from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import TimeoutError as FutureTimeout
 from pathlib import Path
 from typing import TYPE_CHECKING, Any
 
@@ -100,7 +102,7 @@ class SshHost:
             return val
         if cfg.key_passphrase_keyring:
             try:
-                import keyring as _keyring  # type: ignore[import-untyped]
+                import keyring as _keyring
             except ImportError as exc:
                 raise RuntimeError(
                     "keyring package not installed; run: pip install 'unlimited-mcp[ssh]'"
@@ -110,9 +112,7 @@ class SshHost:
             # multiple hosts sharing one key reuse a single keychain entry.
             account = cfg.key_passphrase_account
             if not account:
-                account = (
-                    Path(cfg.key_file).name if cfg.key_file else cfg.user
-                )
+                account = Path(cfg.key_file).name if cfg.key_file else cfg.user
             val = _keyring.get_password(cfg.key_passphrase_keyring, account)
             if val is None:
                 self._passphrase_missing_reason = (
@@ -163,7 +163,7 @@ class SshHost:
             # When not set, fall back to standard key names (~/.ssh/id_*).
             look_for_keys=not has_explicit_key,
         )
-        if has_explicit_key:
+        if has_explicit_key and self._config.key_file is not None:
             kwargs["key_filename"] = str(Path(self._config.key_file).expanduser())
         if passphrase is not None:
             kwargs["passphrase"] = passphrase
@@ -201,10 +201,8 @@ class SshHost:
                 transport = self._client.get_transport()
                 if transport is not None and transport.is_active():
                     return self._client
-                try:
+                with contextlib.suppress(Exception):
                     self._client.close()
-                except Exception:
-                    pass
                 self._client = None
                 self._ts_bin_cache = None
             self._client = self._connect()
@@ -212,10 +210,8 @@ class SshHost:
 
     def close(self) -> None:
         if self._client is not None:
-            try:
+            with contextlib.suppress(Exception):
                 self._client.close()
-            except Exception:
-                pass
             self._client = None
 
     def __del__(self) -> None:
@@ -230,7 +226,7 @@ class SshHost:
         sftp = self._get_client().open_sftp()
         try:
             with sftp.open(remote_path, "rb") as f:
-                return f.read()
+                return bytes(f.read())
         finally:
             sftp.close()
 
@@ -241,10 +237,8 @@ class SshHost:
             # Ensure parent directory exists.
             parent = remote_path.rsplit("/", 1)[0]
             if parent:
-                try:
-                    sftp.mkdir(parent)
-                except OSError:
-                    pass  # already exists
+                with contextlib.suppress(OSError):
+                    sftp.mkdir(parent)  # OSError → already exists
             with sftp.open(remote_path, "wb") as f:
                 f.write(content)
         finally:
@@ -267,10 +261,10 @@ class SshHost:
 
     def _open_channel_with_agent(
         self,
-        client: "paramiko.SSHClient",
+        client: paramiko.SSHClient,
         cmd: str,
         timeout_seconds: int,
-    ) -> tuple:
+    ) -> tuple[Any, Any, Any]:
         """Open a channel with SSH agent forwarding enabled and exec *cmd*.
 
         Forwards the local SSH agent to the remote session so that workers can
@@ -329,7 +323,7 @@ class SshHost:
                 stderr_raw: bytes = f_err.result(timeout=timeout_seconds)
             except FutureTimeout:
                 stdout_f.channel.close()
-                raise subprocess.TimeoutExpired(argv, timeout_seconds)
+                raise subprocess.TimeoutExpired(argv, timeout_seconds) from None
 
         exit_code: int = stdout_f.channel.recv_exit_status()
         duration_ms = int((time.monotonic() - t0) * 1000)
@@ -369,9 +363,7 @@ class SshHost:
         """Probe the remote for task-spooler binary name (tsp/ts). Cached per connection."""
         if self._ts_bin_cache is not None:
             return self._ts_bin_cache
-        out = self.run(
-            ["sh", "-c", "command -v tsp || command -v ts 2>/dev/null || echo ts"]
-        )
+        out = self.run(["sh", "-c", "command -v tsp || command -v ts 2>/dev/null || echo ts"])
         name = out.stdout.decode().strip().split("\n")[-1].strip() or "ts"
         self._ts_bin_cache = name
         return self._ts_bin_cache
@@ -412,10 +404,7 @@ class SshHost:
 
         if exit_code_path:
             # Wrap so exit code is saved even when the inner command fails.
-            inner = (
-                f"{{ {inner}; }}; "
-                f"_ec=$?; echo $_ec > {shlex.quote(exit_code_path)}; exit $_ec"
-            )
+            inner = f"{{ {inner}; }}; _ec=$?; echo $_ec > {shlex.quote(exit_code_path)}; exit $_ec"
 
         ts_env: dict[str, str] | None = {"TS_SOCKET": ts_socket} if ts_socket else None
         ts_bin = self._find_remote_ts_bin()
@@ -458,7 +447,5 @@ class SshHost:
         # -k sends SIGTERM to the running job; -r removes a queued job.
         # Ignore errors — the job may have already finished.
         for flag in ("-k", "-r"):
-            try:
+            with contextlib.suppress(Exception):
                 self.run([ts_bin, flag, str(slot_id)], env_extra=ts_env)
-            except Exception:
-                pass

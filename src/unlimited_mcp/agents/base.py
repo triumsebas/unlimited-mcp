@@ -50,7 +50,7 @@ Param render rules (``ParamSpec.render``)
 from __future__ import annotations
 
 import shlex
-from dataclasses import dataclass, field
+from dataclasses import dataclass
 from typing import Any
 
 from unlimited_mcp.config.schema import Config, Knowledge, ParamSpec
@@ -172,18 +172,18 @@ class CLIAgent:
         # Resolve effective delivery mode
         effective_via = self.prompt_via
         if effective_via == "arg_with_stdin_fallback":
-            if prompt and len(prompt.encode()) > _STDIN_THRESHOLD:
-                effective_via = "stdin"
-            else:
-                effective_via = "arg"
+            effective_via = "stdin" if prompt and len(prompt.encode()) > _STDIN_THRESHOLD else "arg"
 
         # Select template: stdin_command_template takes precedence for stdin/file
         # modes when the CLI syntax changes (e.g. "codex exec -" vs "codex exec {prompt}").
         use_stdin_template = (
-            effective_via in ("stdin", "file")
-            and self.stdin_command_template is not None
+            effective_via in ("stdin", "file") and self.stdin_command_template is not None
         )
-        template = self.stdin_command_template if use_stdin_template else self.command_template
+        if use_stdin_template:
+            assert self.stdin_command_template is not None  # guaranteed by use_stdin_template
+            template = self.stdin_command_template
+        else:
+            template = self.command_template
 
         argv = _expand_template(
             template,

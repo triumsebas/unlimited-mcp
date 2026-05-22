@@ -265,7 +265,7 @@ def answer_worker_questions(
         return {
             "ok": False,
             "error": f"No questions directory for job {job_id!r}. "
-                     "Was the job started with clarify_rounds > 0?",
+            "Was the job started with clarify_rounds > 0?",
         }
 
     q_file = q_dir / f"round_{round_number:03d}_questions.json"
@@ -273,7 +273,7 @@ def answer_worker_questions(
         return {
             "ok": False,
             "error": f"round_{round_number:03d}_questions.json not found. "
-                     f"Available: {[f.name for f in sorted(q_dir.iterdir())]}",
+            f"Available: {[f.name for f in sorted(q_dir.iterdir())]}",
         }
 
     a_file = q_dir / f"round_{round_number:03d}_answers.json"
@@ -374,7 +374,7 @@ def resume_agent_task(
             started_at=now,
             finished_at=now,
             summary="Could not determine agent name from meta.json. "
-                    "Pass agent_name_override explicitly.",
+            "Pass agent_name_override explicitly.",
         )
 
     original_prompt: str = meta.get("original_prompt") or ""
@@ -385,9 +385,7 @@ def resume_agent_task(
     qa_section = _build_qa_history(runner._store.questions_dir(failed_job_id))
 
     enriched_prompt = (
-        f"{original_prompt}\n\n"
-        f"## Resumed session — Q&A history from previous run\n\n"
-        f"{qa_section}"
+        f"{original_prompt}\n\n## Resumed session — Q&A history from previous run\n\n{qa_section}"
     )
     if extra_context:
         enriched_prompt += f"\n\n## Additional context from orchestrator\n\n{extra_context}"
@@ -446,9 +444,11 @@ def _build_qa_history(q_dir: Path) -> str:
                     lines.append(f"  - {opt}")
         if n in answered:
             lines.append("**Answers:**")
-            for a in (answered[n] if isinstance(answered[n], list) else [answered[n]]):
-                lines.append(f"  - Q{a.get('id', '?')}: {a.get('answer', '?')}"
-                             + (f" — {a['reasoning']}" if a.get("reasoning") else ""))
+            for a in answered[n] if isinstance(answered[n], list) else [answered[n]]:
+                lines.append(
+                    f"  - Q{a.get('id', '?')}: {a.get('answer', '?')}"
+                    + (f" — {a['reasoning']}" if a.get("reasoning") else "")
+                )
         else:
             lines.append("*(no answers received — this was the pending round)*")
         lines.append("")

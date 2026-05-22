@@ -14,7 +14,6 @@ Subcommands:
 from __future__ import annotations
 
 import json
-import os
 import shutil
 import sys
 from pathlib import Path
@@ -200,17 +199,19 @@ def _cmd_init(args: list[str]) -> int:
 
     server_path = shutil.which("unlimited-mcp") or sys.executable + " -m unlimited_mcp"
     print("\n--- Add to your Claude Code MCP config (claude_desktop_config.json) ---")
-    print(json.dumps(
-        {
-            "mcpServers": {
-                "unlimited-mcp": {
-                    "command": server_path,
-                    "args": ["serve"],
+    print(
+        json.dumps(
+            {
+                "mcpServers": {
+                    "unlimited-mcp": {
+                        "command": server_path,
+                        "args": ["serve"],
+                    }
                 }
-            }
-        },
-        indent=2,
-    ))
+            },
+            indent=2,
+        )
+    )
     print("\nThen restart Claude Code and run: list_capabilities()")
     return 0
 
@@ -221,12 +222,13 @@ def _cmd_init(args: list[str]) -> int:
 
 
 def _cmd_doctor(args: list[str]) -> int:
-    import yaml
 
     from unlimited_mcp.paths import audit_dir, config_path, knowledge_local_path, state_dir
 
     if "-h" in args or "--help" in args:
-        print("unlimited-mcp doctor\n\nCheck config validity, binary availability, and recent errors.")
+        print(
+            "unlimited-mcp doctor\n\nCheck config validity, binary availability, and recent errors."
+        )
         return 0
 
     ok = True
@@ -240,7 +242,6 @@ def _cmd_doctor(args: list[str]) -> int:
     else:
         try:
             from unlimited_mcp.config.loader import ConfigStore
-            from unlimited_mcp.config.schema import Config
 
             cfg = ConfigStore(cfg_file).get()
             print(f"[OK]  config.yaml valid ({cfg_file})")
@@ -338,10 +339,7 @@ def _cmd_export_config(args: list[str]) -> int:
 def _cmd_jobs(args: list[str]) -> int:
     if not args or args[0] in {"-h", "--help"}:
         print(
-            "Usage: unlimited-mcp jobs <subcommand>\n"
-            "\n"
-            "Subcommands:\n"
-            "  ls   List all known jobs.",
+            "Usage: unlimited-mcp jobs <subcommand>\n\nSubcommands:\n  ls   List all known jobs.",
             file=sys.stderr,
         )
         return 0 if args else 2

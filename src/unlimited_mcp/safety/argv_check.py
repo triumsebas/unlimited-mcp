@@ -95,11 +95,19 @@ class SafetyChecker:
 
     @property
     def config(self) -> Config:
-        return self._config_src.get() if isinstance(self._config_src, ConfigStore) else self._config_src
+        return (
+            self._config_src.get()
+            if isinstance(self._config_src, ConfigStore)
+            else self._config_src
+        )
 
     @property
     def knowledge(self) -> Knowledge:
-        return self._knowledge_src.get() if isinstance(self._knowledge_src, KnowledgeStore) else self._knowledge_src
+        return (
+            self._knowledge_src.get()
+            if isinstance(self._knowledge_src, KnowledgeStore)
+            else self._knowledge_src
+        )
 
     def check_run_command(
         self,
@@ -150,7 +158,9 @@ class SafetyChecker:
 
         effective_roots = list(self.config.allowed_roots)
         if extra_allowed_roots:
-            effective_roots = effective_roots + [r for r in extra_allowed_roots if r not in effective_roots]
+            effective_roots = effective_roots + [
+                r for r in extra_allowed_roots if r not in effective_roots
+            ]
 
         offender = check_paths(
             paths,

@@ -13,11 +13,9 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Any
 
-import yaml
 from ruamel.yaml import YAML
 from ruamel.yaml.comments import CommentedMap
 
-from unlimited_mcp.config.knowledge import KnowledgeStore
 from unlimited_mcp.config.schema import CliKnowledge, Knowledge
 
 

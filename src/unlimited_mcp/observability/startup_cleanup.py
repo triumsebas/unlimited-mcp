@@ -54,7 +54,7 @@ def cleanup_orphaned_worktrees(work_dir: Path) -> list[str]:
         if not content.startswith("gitdir:"):
             continue
         # gitdir: /path/to/repo/.git/worktrees/<name>
-        gitdir = Path(content[len("gitdir:"):].strip())
+        gitdir = Path(content[len("gitdir:") :].strip())
         repo_git = gitdir.parent.parent  # /path/to/repo/.git
         if repo_git.exists():
             continue  # source repo still alive

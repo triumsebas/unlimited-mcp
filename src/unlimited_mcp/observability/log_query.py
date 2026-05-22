@@ -28,12 +28,23 @@ def _parse_since(since: str) -> datetime:
     relative = re.fullmatch(r"(\d+)(m|h|d)", since.strip())
     if relative:
         value, unit = int(relative.group(1)), relative.group(2)
-        delta = {"m": timedelta(minutes=value), "h": timedelta(hours=value), "d": timedelta(days=value)}[unit]
+        delta = {
+            "m": timedelta(minutes=value),
+            "h": timedelta(hours=value),
+            "d": timedelta(days=value),
+        }[unit]
         return datetime.now(UTC) - delta
     return datetime.fromisoformat(since.replace("Z", "+00:00"))
 
 
-def _matches(entry: dict[str, Any], *, since_dt: datetime | None, level: str | None, tool: str | None, job_id: str | None) -> bool:
+def _matches(
+    entry: dict[str, Any],
+    *,
+    since_dt: datetime | None,
+    level: str | None,
+    tool: str | None,
+    job_id: str | None,
+) -> bool:
     if since_dt is not None:
         ts_raw = entry.get("timestamp") or entry.get("ts") or ""
         if ts_raw:
@@ -48,12 +59,17 @@ def _matches(entry: dict[str, Any], *, since_dt: datetime | None, level: str | N
         return False
     if tool and entry.get("tool") != tool:
         return False
-    if job_id and entry.get("job_id") != job_id:
-        return False
-    return True
+    return not (job_id and entry.get("job_id") != job_id)
 
 
-def _read_jsonl(path: Path, *, since_dt: datetime | None, level: str | None, tool: str | None, job_id: str | None) -> list[dict[str, Any]]:
+def _read_jsonl(
+    path: Path,
+    *,
+    since_dt: datetime | None,
+    level: str | None,
+    tool: str | None,
+    job_id: str | None,
+) -> list[dict[str, Any]]:
     """Read matching entries from a single JSONL file (newest last)."""
     if not path.exists():
         return []
@@ -107,7 +123,9 @@ def query_logs(
         except (ValueError, KeyError):
             return {
                 "ok": False,
-                "error": f"Cannot parse since={since!r}. Use '1h', '30m', '2d', or an ISO-8601 datetime.",
+                "error": (
+                    f"Cannot parse since={since!r}. Use '1h', '30m', '2d', or an ISO-8601 datetime."
+                ),
                 "entries": [],
             }
 
