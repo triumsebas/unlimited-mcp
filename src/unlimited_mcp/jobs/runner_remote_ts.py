@@ -30,15 +30,12 @@ The binary is auto-detected on the remote via :meth:`SshHost._find_remote_ts_bin
 
 from __future__ import annotations
 
+import contextlib
 import logging
-import subprocess
 import threading
 import time
 from collections.abc import Callable
 from datetime import UTC, datetime
-from pathlib import Path
-
-import json
 
 from unlimited_mcp.hosts.ssh import SshHost
 from unlimited_mcp.jobs.result import CommandRecord, ErrorBlock, JobResult, JobStatus
@@ -103,6 +100,8 @@ class RemoteTsRunner:
         tool: str = "run_command",
         branch: str | None = None,
         worktree_path: str | None = None,
+        worktree_base: str | None = None,  # postprocess is local-only (v1); accepted, unused
+        quality_gate_enabled: bool = True,  # postprocess is local-only (v1); accepted, unused
         cleanup_fn: Callable[[], None] | None = None,
         stdin_content: str | None = None,
         prompt_file_content: str | None = None,
@@ -110,6 +109,7 @@ class RemoteTsRunner:
         remote_questions_dir: str | None = None,
     ) -> JobResult:
         """Enqueue *argv* on the remote task-spooler and return immediately."""
+        del worktree_base, quality_gate_enabled  # local-only postprocess; not run remotely
         self._ensure_slots_configured()
 
         job_id = job_id or JobStore.make_job_id(tool)
@@ -131,18 +131,36 @@ class RemoteTsRunner:
         # Temp file on remote to capture the exit code.
         ec_path = f"/tmp/.umcp-{job_id}.ec"
 
-        try:
-            slot_id = self._host.ts_submit(
-                argv,
-                label=job_id,
-                cwd=cwd,
-                env_extra=env_extra,
-                ts_socket=self._ts_socket,
-                exit_code_path=ec_path,
-                stdin_file=remote_stdin_file,
+        # Retry the remote enqueue on transient SSH/ts failures (exponential
+        # backoff). The remote worker itself is never retried here.
+        from unlimited_mcp.jobs.runner_ts import _RETRY_BACKOFF_BASE, _RETRY_MAX_ATTEMPTS
+
+        slot_id = None
+        last_exc: Exception | None = None
+        for attempt in range(1, _RETRY_MAX_ATTEMPTS + 1):
+            try:
+                slot_id = self._host.ts_submit(
+                    argv,
+                    label=job_id,
+                    cwd=cwd,
+                    env_extra=env_extra,
+                    ts_socket=self._ts_socket,
+                    exit_code_path=ec_path,
+                    stdin_file=remote_stdin_file,
+                )
+                last_exc = None
+                break
+            except Exception as exc:
+                last_exc = exc
+                if attempt < _RETRY_MAX_ATTEMPTS:
+                    time.sleep(_RETRY_BACKOFF_BASE * (2 ** (attempt - 1)))
+        if last_exc is not None:
+            log.error(
+                "RemoteTsRunner: failed to enqueue %s on %s: %s",
+                job_id,
+                self._host.name,
+                last_exc,
             )
-        except Exception as exc:
-            log.error("RemoteTsRunner: failed to enqueue %s on %s: %s", job_id, self._host.name, exc)
             self._store.create(job_id)
             result = JobResult(
                 ok=False,
@@ -152,10 +170,10 @@ class RemoteTsRunner:
                 tag=tag,
                 started_at=started_at,
                 finished_at=datetime.now(UTC),
-                summary=str(exc)[:500],
+                summary=str(last_exc)[:500],
                 error=ErrorBlock(
                     code="REMOTE_TS_SUBMIT_ERROR",
-                    message=str(exc),
+                    message=str(last_exc),
                     hint=f"Check that task-spooler (ts/tsp) is installed on {self._host.name}.",
                 ),
                 branch=branch,
@@ -164,6 +182,7 @@ class RemoteTsRunner:
             self._store.write_result(result)
             return result
 
+        assert slot_id is not None  # guaranteed: last_exc is None ⇒ ts_submit succeeded
         self._slot_map[job_id] = slot_id
         self._store.create(job_id)
         self._store.write_meta(
@@ -189,7 +208,9 @@ class RemoteTsRunner:
             tag=tag,
             started_at=started_at,
             summary=(
-                f"[{self._host.name}] {label}" if label else f"[{self._host.name}] queued (slot {slot_id})"
+                f"[{self._host.name}] {label}"
+                if label
+                else f"[{self._host.name}] queued (slot {slot_id})"
             ),
             branch=branch,
             worktree_path=worktree_path,
@@ -198,9 +219,21 @@ class RemoteTsRunner:
 
         t = threading.Thread(
             target=self._poll,
-            args=(job_id, slot_id, ec_path, timeout_seconds, tool, tag,
-                  started_at, branch, worktree_path, cleanup_fn,
-                  remote_questions_dir, remote_prompt_file, remote_stdin_file),
+            args=(
+                job_id,
+                slot_id,
+                ec_path,
+                timeout_seconds,
+                tool,
+                tag,
+                started_at,
+                branch,
+                worktree_path,
+                cleanup_fn,
+                remote_questions_dir,
+                remote_prompt_file,
+                remote_stdin_file,
+            ),
             daemon=True,
             name=f"remote-ts-watcher-{job_id}",
         )
@@ -240,7 +273,12 @@ class RemoteTsRunner:
             try:
                 self._host.ts_cancel(slot_id, ts_socket=self._ts_socket)
             except Exception as exc:
-                log.warning("RemoteTsRunner: could not cancel slot %d on %s: %s", slot_id, self._host.name, exc)
+                log.warning(
+                    "RemoteTsRunner: could not cancel slot %d on %s: %s",
+                    slot_id,
+                    self._host.name,
+                    exc,
+                )
 
         cancelled = JobResult(
             ok=False,
@@ -283,9 +321,7 @@ class RemoteTsRunner:
                 "RemoteTsRunner: set remote ts slots=%d on %s", self._max_slots, self._host.name
             )
         except Exception as exc:
-            log.warning(
-                "RemoteTsRunner: could not set slots on %s: %s", self._host.name, exc
-            )
+            log.warning("RemoteTsRunner: could not set slots on %s: %s", self._host.name, exc)
         self._slots_configured = True
 
     def _poll(
@@ -329,12 +365,12 @@ class RemoteTsRunner:
             timed_out = True
             log.warning(
                 "RemoteTsRunner: job %s timed out after %ds on %s",
-                job_id, timeout_seconds, self._host.name,
+                job_id,
+                timeout_seconds,
+                self._host.name,
             )
-            try:
+            with contextlib.suppress(Exception):
                 self._host.ts_cancel(slot_id, ts_socket=self._ts_socket)
-            except Exception:
-                pass
 
         if job_id in self._cancelled:
             return
@@ -344,9 +380,13 @@ class RemoteTsRunner:
 
         if timed_out:
             self._write_failed(
-                job_id, tool, tag, started_at,
+                job_id,
+                tool,
+                tag,
+                started_at,
                 f"Killed after {timeout_seconds}s timeout on {self._host.name}.",
-                branch, worktree_path,
+                branch,
+                worktree_path,
             )
             if cleanup_fn is not None:
                 _safe_call(cleanup_fn)
@@ -373,10 +413,8 @@ class RemoteTsRunner:
         # Clean up remote temp files (exit-code, prompt, stdin).
         for _path in (ec_path, remote_prompt_file, remote_stdin_file):
             if _path is not None:
-                try:
+                with contextlib.suppress(Exception):
                     self._host.run(["rm", "-f", _path])
-                except Exception:
-                    pass
 
         # Write output to store.
         stdout_path = self._store.stdout_path(job_id)
@@ -432,7 +470,11 @@ class RemoteTsRunner:
         # Discover remote question files via SSH ls.
         try:
             out = self._host.run(
-                ["sh", "-c", f"ls {remote_questions_dir}/round_*_questions.json 2>/dev/null || true"]
+                [
+                    "sh",
+                    "-c",
+                    f"ls {remote_questions_dir}/round_*_questions.json 2>/dev/null || true",
+                ]
             )
             remote_files = [p.strip() for p in out.stdout.decode().splitlines() if p.strip()]
         except Exception as exc:
@@ -480,28 +522,28 @@ class RemoteTsRunner:
         if job_id in self._cancelled:
             return
         now = datetime.now(UTC)
-        self._store.write_result(JobResult(
-            ok=False,
-            job_id=job_id,
-            status="failed",
-            tool=tool,
-            tag=tag,
-            started_at=started_at,
-            finished_at=now,
-            duration_ms=int((now - started_at).total_seconds() * 1000),
-            summary=message[:500],
-            error=ErrorBlock(
-                code="REMOTE_TS_ERROR",
-                message=message,
-                hint=f"Check SSH connectivity and task-spooler status on {self._host.name}.",
-            ),
-            branch=branch,
-            worktree_path=worktree_path,
-        ))
+        self._store.write_result(
+            JobResult(
+                ok=False,
+                job_id=job_id,
+                status="failed",
+                tool=tool,
+                tag=tag,
+                started_at=started_at,
+                finished_at=now,
+                duration_ms=int((now - started_at).total_seconds() * 1000),
+                summary=message[:500],
+                error=ErrorBlock(
+                    code="REMOTE_TS_ERROR",
+                    message=message,
+                    hint=f"Check SSH connectivity and task-spooler status on {self._host.name}.",
+                ),
+                branch=branch,
+                worktree_path=worktree_path,
+            )
+        )
 
 
 def _safe_call(fn: Callable[[], None]) -> None:
-    try:
+    with contextlib.suppress(Exception):
         fn()
-    except Exception:
-        pass
