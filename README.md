@@ -354,7 +354,13 @@ Any MCP-compatible orchestrator should work with no or minor changes. If you tes
   See [SSH.md](SSH.md) for setup.
 - **Remote GPU clusters** — submit jobs to remote Ollama/MLX/LM Studio servers
 
-### 🔜 Phase 4 — Notifications & observability
+### ✅ Phase 4 — Quality gates & conflict detection
+- **Post-job quality gate** — lint + type-check the changed files (Python, JS/TS, Go, Rust), auto-fix formatting, attach a `PASS`/`NOPASS`/`NOTDETECTED`/`MISSINGDEP` verdict to the `JobResult`
+- **`changed_files` reporting** — every coding job lists exactly which files it touched
+- **Conflict detection** — `FILE_CONFLICT` warnings + `detect_conflicts()` to catch parallel jobs editing the same files before they collide
+- **Auto-retry** — `ts`/`remote_ts` enqueue retries with backoff so a transient daemon hiccup doesn't kill a job
+
+### 🔜 Phase 5 — Notifications & observability
 - **ACP client backend** *(first priority)* — native [Agent Client Protocol](https://agentclientprotocol.com/) support so any ACP-compatible agent works as a worker without a custom adapter. The [ACP registry](https://github.com/agentclientprotocol/registry) lists 30+ agents already shipping ACP — OpenCode (`opencode acp`), Cline, Gemini CLI, Goose, Kilo, Dirac, and more. Benefits over the current CLI model: streaming progress replaces polling, structured diffs replace raw patch files, and `session/set_mode` maps cleanly to workspace presets.
 - **Anthropic direct provider** — planned if there is enough demand. In the meantime, LiteLLM (local proxy) and OpenRouter (cloud) already cover this with no additional setup: both expose an OpenAI-compatible endpoint that works with the existing provider configuration.
 - **Webhook / instant messaging notifications** — get notified when long background jobs complete

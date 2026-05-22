@@ -97,6 +97,36 @@ you need the full stdout.
 
 ---
 
+## Post-job quality & conflicts
+
+For coding jobs that ran in a git worktree (`workspace="safe_dev"`/`quick_edit`),
+the server runs a **quality gate** (lint + type-check on the changed files,
+formatting auto-fixed in place) and computes `changed_files`. Both are pushed
+back inside the `JobResult` you already read — no extra call needed.
+
+After a coding job, inspect `result.quality_gate.status`:
+
+| status | meaning | what to do |
+|---|---|---|
+| `PASS` | checks ran, changed files clean | proceed |
+| `NOPASS` | linter/type-checker found issues | read `issues` (file:line:rule:message) or `report_ref`; **fix them yourself** (you have `worktree_path`/`branch`) or `resume_agent_task(job_id, extra_context=<issues>)` to hand them back to the worker |
+| `NOTDETECTED` | no recognized language among changed files | gate skipped; proceed |
+| `MISSINGDEP` | a required tool isn't on the worker PATH | see `missing_deps`; the check was skipped — not a code failure |
+
+Each result also carries `quality_gate.hint` spelling out the next step.
+The gate is on by default; disable globally with `quality_gate.enabled: false`
+in `config.yaml`. Languages covered in v1: Python, JS/TS, Go, Rust. Quality gate
+and `changed_files` run for **local** execution (`local`/`ts` queues); remote
+execution is not gated in v1.
+
+**Conflicts.** When a job's changed files overlap another active/recent job,
+the result carries a `JobWarning(code="FILE_CONFLICT")`. When you run several
+coding jobs in parallel, call **`detect_conflicts()`** before merging branches —
+it lists every pair of jobs touching the same files (the classic cause of merge
+conflicts and lost work in multi-agent coding).
+
+---
+
 ## Safety
 
 Workers can only access paths in `allowed_roots`.  Before any repo task:
@@ -411,9 +441,11 @@ live end-to-end checklist you (the orchestrator) execute on request.**
 `tests/integration/test_smoke.py` — headless, no API keys, ~seconds. Drives
 the server through the real MCP path with `echo`/`sleep` only. One focused
 test per capability category (tool surface, config CRUD, sysops, safety,
-lifecycle, idempotency, cancel, local + ts delegation, cleanup/logs), plus
-explicit regression pins for shipped bugs (summary population, `TsRunner`
-`job_id`, `submit_task` argv idempotency).
+lifecycle, idempotency, cancel, local + ts delegation, cleanup/logs,
+quality gate PASS/NOPASS/NOTDETECTED/MISSINGDEP, `changed_files`,
+`detect_conflicts`, ts enqueue auto-retry), plus explicit regression pins for
+shipped bugs (summary population, `TsRunner` `job_id`, `submit_task` argv
+idempotency).
 
 Run it with `uv run pytest tests/integration/test_smoke.py -q` (or the full
 `uv run pytest -q`). Tier A must be green before **any** commit.
