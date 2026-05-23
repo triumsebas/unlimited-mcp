@@ -25,9 +25,10 @@ only carries the Claude-Code-specific deltas.
   and `ScheduleWakeup`-based monitoring that only exist in Claude Code.
 - `configure_agent` persists defaults to config — set them there, don't just
   hold them in conversation context.
-- The **`/selftest` skill** runs the Tier B live regression checklist
-  (AGENTS.md → "Regression suite") and reports pass/fail per step. Use it
-  when the user asks to run the battery or before a version bump. Codex has
-  no skill; it runs the same checklist from AGENTS.md directly.
+- The **`/unlimited-mcp-selftest` skill** runs the full regression checklist
+  (Tier 0 lint+types, Tier A smoke tests, Tier B live end-to-end) and reports
+  pass/fail per step. Use it when the user asks to run the battery or before a
+  version bump. Codex has no skill; it runs the same checklist from AGENTS.md
+  directly.
 - In the imported reference, the **"Codex-specific notes"** section does not
   apply to you; everything else does.
