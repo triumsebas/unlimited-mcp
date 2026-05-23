@@ -17,19 +17,22 @@ cd unlimited-mcp
 uv sync --all-extras
 ```
 
-### Symlink the delegate skill (avoid two copies)
+### Symlink the skills (avoid two copies)
 
-If you use Claude Code with the `unlimited-mcp` skill installed **and** you are also developing the server in this repo, your installed skill (`~/.claude/skills/delegate/SKILL.md`) and the repo copy (`skills/delegate/SKILL.md`) will drift apart unless you keep them in sync.
+If you use Claude Code with the `unlimited-mcp` skills installed **and** you are also developing the server in this repo, the installed copies under `~/.claude/skills/` and the repo copies under `skills/` will drift apart unless you keep them in sync.
 
-The simplest fix is a symlink so there is only one file:
+The simplest fix is a symlink so there is only one file per skill:
 
 ```bash
 # Run once after cloning; replace the path with your actual clone location
 ln -sf /path/to/unlimited-mcp/skills/delegate/SKILL.md \
        ~/.claude/skills/delegate/SKILL.md
+
+ln -sf /path/to/unlimited-mcp/skills/unlimited-mcp-selftest/SKILL.md \
+       ~/.claude/skills/unlimited-mcp-selftest/SKILL.md
 ```
 
-After this, every edit to `skills/delegate/SKILL.md` is immediately live in your Claude Code session — no copy step needed.
+After this, every edit to a skill file in the repo is immediately live in your Claude Code session — no copy step needed.
 
 ---
 
@@ -73,14 +76,15 @@ uv run pytest -m "not requires_opencode_key"
 test per MCP capability plus pins for fixed bugs. It must be green before
 every commit. The **Tier B** live end-to-end battery (real agents, remote
 SSH) is documented in [AGENTS.md](AGENTS.md) → "Regression suite" and can
-be driven by the `/selftest` skill in Claude Code; run it before a version
-bump.
+be driven by the `/unlimited-mcp-selftest` skill in Claude Code; run it
+before a version bump.
 
 Lint and type-check:
 
 ```bash
-uv run ruff check src/
-uv run mypy src/
+uv run ruff check src tests
+uv run ruff format --check src tests
+uv run mypy
 ```
 
 ## Adding a new agent CLI
