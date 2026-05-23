@@ -3,12 +3,12 @@
   "name": "io.github.triumsebas/unlimited-mcp",
   "title": "unlimited-mcp",
   "description": "Delegate coding and sysops tasks to cheaper agents or local LLMs via durable background job queues.",
-  "version": "0.9.3",
+  "version": "0.9.4",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "unlimited-mcp",
-      "version": "0.9.3",
+      "version": "0.9.4",
       "transport": {
         "type": "stdio"
       }
