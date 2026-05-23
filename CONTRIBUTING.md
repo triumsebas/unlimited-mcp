@@ -108,6 +108,31 @@ agents:
 
 Test it with `lookup_agent_cli('your_agent')` after adding.
 
+## Releasing a new version
+
+1. Run `/unlimited-mcp-selftest` in Claude Code (Tier 0 + Tier A + Tier B).
+   Only proceed if the verdict is `BATTERY GREEN`.
+2. Bump the version in **both** files — they must always stay in sync:
+   ```bash
+   # pyproject.toml  →  version = "X.Y.Z"
+   # server.json     →  "version": "X.Y.Z"  (two occurrences: top-level and inside packages[])
+   ```
+3. Commit, push, tag, push the tag — CI publishes to PyPI automatically:
+   ```bash
+   git add pyproject.toml server.json
+   git commit -m "chore: bump version to X.Y.Z"
+   git push
+   git tag vX.Y.Z && git push origin vX.Y.Z
+   ```
+4. Publish to the MCP registry:
+   ```bash
+   mcp-publisher publish   # re-run mcp-publisher login github if token expired
+   ```
+
+> **Common mistake**: forgetting to update `server.json` causes
+> `mcp-publisher publish` to fail with *"cannot publish duplicate version"*
+> because it reads `server.json`, not `pyproject.toml`.
+
 ## Pull requests
 
 - Keep PRs focused — one feature or fix per PR

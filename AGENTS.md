@@ -488,7 +488,14 @@ When the user asks to **bump the version**:
    bump.
 2. If Tier A is green, run **Tier B**. If anything fails: stop, report
    which step, do **not** bump.
-3. Only if **both** tiers pass: bump the version, commit, push.
+3. Only if **both** tiers pass: bump the version. Update **both** files
+   together — they must always stay in sync:
+   - `pyproject.toml` → `version = "X.Y.Z"`
+   - `server.json` → `"version": "X.Y.Z"` (two occurrences)
+
+   Then commit, push, tag `vX.Y.Z`, push the tag. The CI workflow
+   (`publish.yml`) publishes to PyPI automatically on the tag. Run
+   `mcp-publisher publish` afterwards to update the MCP registry.
 
 Tier A also runs on every ordinary change (it's free). Tier B can be run
 on its own ("run the battery") without a bump. The **only** way to skip
